@@ -17,6 +17,7 @@ from tf.contracts import Envelope
 from tf.dsl import validate_spec, SpecError
 from tf.engine import DEFAULT_COSTS, run_backtest
 from tf.marketdata import MarketData
+from tf.memory import LessonExtractor, MemoryStore, cosine, embed
 from tf.permissions import PermissionBroker
 from tf.audit import AuditLog
 from tf.validation import BatteryResult, ValidationPolicy, run_battery
@@ -53,19 +54,50 @@ SEED_HYPOTHESES: list[dict[str, Any]] = [
 
 
 class ResearchTemplateAgent(Agent):
-    """Genera propuestas deterministas. Fase 2: reemplazo por LLM con misma interfaz."""
+    """Genera propuestas deterministas. Fase 2: reemplazo por LLM con misma interfaz.
+
+    Con memoria (Fase 3): consulta lecciones antes de proponer (R-4/R-5) y salta
+    familias bloqueadas o ideas ya fracasadas.
+    """
 
     department = "research"
     subscriptions: tuple[str, ...] = ()
+
+    def __init__(self, memory: MemoryStore | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.memory = memory
 
     def handle(self, envelope: Envelope) -> None:
         # Fuente push: no consume mensajes del bus en Fase 1.
         return None
 
+    def _is_blocked(self, seed: dict[str, Any]) -> bool:
+        """R-4/R-5: spec ya rechazado, familia bloqueada o hipótesis similar a un fracaso."""
+        if self.memory is None:
+            return False
+        spec = seed["spec"]
+        if self.memory.is_spec_dead(spec):
+            return True
+        if self.memory.is_family_locked(spec):
+            return True
+        emb = embed(seed["hypothesis"])
+        family = f"{spec['type']}|SYNTH"
+        for lesson in self.memory.lessons:
+            if lesson.family_key == family and cosine(emb, lesson.embedding) >= 0.8:
+                return True
+        return False
+
     def generate(self, count: int | None = None) -> list[tuple[Envelope, dict[str, Any]]]:
-        """Publica propuestas y devuelve (envelope, semilla) para el coder."""
+        """Publica propuestas; las bloqueadas por memoria se saltan y quedan auditadas."""
         out = []
         for seed in SEED_HYPOTHESES[: count or len(SEED_HYPOTHESES)]:
+            if self._is_blocked(seed):
+                self.audit.append(
+                    actor=self.name,
+                    event_type="research.proposal_skipped",
+                    payload={"hypothesis": seed["hypothesis"], "reason": "memoria: idea ya fracasada o familia bloqueada"},
+                )
+                continue
             proposal_id = f"prop-{uuid.uuid4().hex[:8]}"
             env = self.publish(
                 "strategy.proposal.v1",
@@ -129,12 +161,14 @@ class PipelineRunner:
         audit: AuditLog,
         policy: ValidationPolicy = ValidationPolicy(),
         backtest_promotion_sharpe: float = 0.5,
+        memory: MemoryStore | None = None,
     ) -> None:
         self.bus = bus
         self.broker = broker
         self.audit = audit
         self.policy = policy
         self.backtest_promotion_sharpe = backtest_promotion_sharpe
+        self.memory = memory
         self.catalog: list[CatalogEntry] = []
 
     def run(self, data: MarketData, proposals: int | None = None) -> list[CatalogEntry]:
@@ -144,6 +178,7 @@ class PipelineRunner:
             bus=self.bus,
             broker=self.broker,
             audit=self.audit,
+            memory=self.memory,
         )
         coder_agent = ResearchCoderAgent(
             name="research-coder",
@@ -165,17 +200,31 @@ class PipelineRunner:
             )
         return self.catalog
 
+    def _record(self, spec_id: str, spec: dict, kind: str, verdict: str, summary: str, metrics: dict | None = None) -> None:
+        """Registra la evaluación en memoria y extrae lecciones (Fase 3)."""
+        if self.memory is None:
+            return
+        rec = self.memory.add_evaluation(spec_id, kind, verdict, summary, spec=spec, metrics=metrics)
+        extractor = LessonExtractor()
+        for lesson in (extractor.from_backtest(spec, verdict, metrics or {}) if kind == "backtest" else []):
+            self.memory.add_lesson(
+                content=lesson["content"], tags=lesson["tags"],
+                source_evaluation_id=rec.id, family_key=lesson["family_key"],
+            )
+
     def _evaluate_spec(self, spec_id: str, spec: dict, data: MarketData) -> CatalogEntry:
         # 1+2) Validez estructural (lista blanca) y backtest con costes conservadores
         try:
             validate_spec(spec)
             result = run_backtest(data, spec, DEFAULT_COSTS).compute_metrics()
         except SpecError as exc:
+            self._record(spec_id, spec, "backtest", "RECHAZAR", f"spec inválido: {exc}")
             return CatalogEntry(spec=spec, backtest_verdict="RECHAZAR", metrics={}, battery=None, final=f"RECHAZADA_SPEC: {exc}")
         metrics = result.metrics
         n_trades = metrics["n_trades"]
         profitable = metrics["total_return"] > 0 and metrics["sharpe"] >= self.backtest_promotion_sharpe
         if not profitable or n_trades < self.policy.min_trades:  # B-4 incluido
+            self._record(spec_id, spec, "backtest", "RECHAZAR", "rechazada en backtest", metrics)
             return CatalogEntry(spec=spec, backtest_verdict="RECHAZAR", metrics=metrics, battery=None, final="RECHAZADA_BACKTEST")
 
         # 3) Batería canónica de validación
@@ -189,6 +238,13 @@ class PipelineRunner:
             final = "VALIDADA_PROVISIONAL"
         else:
             final = "RECHAZADA_BATERIA"
+        if self.memory is not None:
+            rec = self.memory.add_evaluation(spec_id, "validation", final, "batería canónica", spec=spec, metrics=metrics)
+            for lesson in LessonExtractor().from_battery(spec, battery.checks, battery.details):
+                self.memory.add_lesson(
+                    content=lesson["content"], tags=lesson["tags"],
+                    source_evaluation_id=rec.id, family_key=lesson["family_key"],
+                )
         return CatalogEntry(
             spec=spec,
             backtest_verdict="PROMOVER_A_VALIDACION",

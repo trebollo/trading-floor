@@ -54,6 +54,29 @@ def test_trend_strategy_reaches_validated_or_provisional():
         assert all(v for k, v in entry.battery.items() if k != "regimen_stress")
 
 
+def test_memory_makes_research_skip_failed_ideas():
+    """Fase 3: tras fracasar una familia, el curator no vuelve a proponerla (R-4/R-5)."""
+    data = synthetic_market(n=2500, drift=0.0012, vol=0.008, seed=42)
+    bus = InMemoryBus()
+    audit = SqliteAuditLog()
+    broker = PermissionBroker.from_yaml(
+        __import__("pathlib").Path(__file__).parent.parent / "config" / "guardrails.yaml", audit=audit
+    )
+    from tf.memory import MemoryStore
+
+    memory = MemoryStore()
+    # Ronda 1: genera lecciones.
+    PipelineRunner(bus, broker, audit, policy=ValidationPolicy(min_trades=30), memory=memory).run(data)
+    r1_lessons = len(memory.lessons)
+    assert r1_lessons > 0
+    # Ronda 2: las hipótesis con lección de fracaso en su familia se saltan.
+    runner2 = PipelineRunner(bus, broker, audit, policy=ValidationPolicy(min_trades=30), memory=memory)
+    catalog2 = runner2.run(data)
+    skipped = [e for e in audit.entries() if e["event_type"] == "research.proposal_skipped"]
+    assert skipped, "la memoria debería saltar ideas ya fracasadas"
+    assert all(entry.final != "VALIDADA" or entry.spec["type"] == "momentum" for entry in catalog2)
+
+
 def test_research_agent_cannot_publish_outside_role():
     """El agente de research (plantilla) no puede publicar decisiones de riesgo."""
     from tf.pipeline import ResearchTemplateAgent

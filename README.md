@@ -63,13 +63,18 @@ Hoja de ruta de implementación: [docs/arquitectura.md §10](docs/arquitectura.m
   [docs/fase1.md](docs/fase1.md): DSL restringido, motor de backtest anti-look-ahead,
   batería canónica completa (Monte Carlo, walk-forward, régimen, sensibilidad, costes,
   correlación) y catálogo de estrategias evaluadas end-to-end.
-- **Fase 2 (riesgo y ejecución en papel)** — implementada y testeada (81 tests). Ver
+- **Fase 2 (riesgo y ejecución en papel)** — implementada y testeada. Ver
   [docs/fase2.md](docs/fase2.md): gate pre-trade determinista fail-closed, tokens de
   riesgo HMAC con TTL, contratos de estrategia, modo solo-cierre por drawdown, execution
   router con idempotencia y auto-suspensión, ledger con replay y reconciliación.
+- **Fase 3 (memoria y evolución)** — implementada y testeada (94 tests). Ver
+  [docs/fase3.md](docs/fase3.md): lecciones automáticas por modo de fallo, memoria
+  consultable con deduplicación semántica, bloqueo de familias (R-5), drift detection
+  con retiro automático por contrato, post-mortems y comité semanal.
 
 ```bash
-uv sync && uv run pytest -q                  # 81 tests
+uv sync && uv run pytest -q                  # 94 tests
 uv run python scripts/run_pipeline.py        # demo Fase 1: investigación
 uv run python scripts/run_trading_day.py     # demo Fase 2: día de trading en papel
+uv run python scripts/run_evolution.py       # demo Fase 3: evolución y aprendizaje
 ```
