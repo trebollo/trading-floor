@@ -22,6 +22,10 @@ models:
     endpoint: https://opencode.ai/zen/go/v1
     api_key_env: OPENCODE_API_KEY
     tier: standard
+    # G3: precios orientativos $/Mtok para la contabilidad del gobernador;
+    # ajustar a la tarifa real facturada por OpenCode.
+    input_cost_per_mtok: 1.5
+    output_cost_per_mtok: 6.0
   frontier-lite:                 # para redacción y tareas voluminosas de bajo coste
     kind: generative
     id: glm-5.3-flash            # OpenCode Go — protocolo chat/completions
@@ -30,6 +34,8 @@ models:
     endpoint: https://opencode.ai/zen/go/v1
     api_key_env: OPENCODE_API_KEY
     tier: economic
+    input_cost_per_mtok: 0.1
+    output_cost_per_mtok: 0.5
 
 agents:
   research-hypothesis:

@@ -4,6 +4,15 @@
 # tools:     lista cerrada de herramientas (G1). Lo que no está aquí no existe.
 # outputs:   tipos de mensaje que puede publicar (G1/G2).
 # data_domains: dominios de memoria que puede leer (G4).
+#
+# G3 · Presupuestos: el CostGovernor (tf.budget) corta antes de gastar.
+# budgets: límites globales por ventana (día UTC para tokens y euros, hora para
+# llamadas); budget: dentro de cada agente, override de tokens_per_day.
+
+budgets:
+  default_tokens_per_day: 2000000   # techo por agente sin override propio
+  calls_per_hour: 60                # anti-bucles: ninguna ráfaga desboca el gasto
+  global_eur_per_day: 5.0           # techo de coste del sistema entero ($/día)
 
 agents:
   research-hypothesis:

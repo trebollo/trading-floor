@@ -164,6 +164,7 @@ class PipelineRunner:
         backtest_promotion_sharpe: float = 0.5,
         memory: MemoryStore | None = None,
         gateway: ModelGateway | None = None,
+        governor: Any | None = None,   # G3: CostGovernor compartido por todos los agentes
     ) -> None:
         self.bus = bus
         self.broker = broker
@@ -172,6 +173,7 @@ class PipelineRunner:
         self.backtest_promotion_sharpe = backtest_promotion_sharpe
         self.memory = memory
         self.gateway = gateway
+        self.governor = governor
         self.catalog: list[CatalogEntry] = []
 
     def _hypothesis_agent(self) -> ResearchTemplateAgent:
@@ -180,7 +182,7 @@ class PipelineRunner:
         if self.gateway is not None:
             from tf.research_llm import ResearchLLMAgent
 
-            return ResearchLLMAgent.from_gateway(self.gateway, **base)
+            return ResearchLLMAgent.from_gateway(self.gateway, governor=self.governor, **base)
         return ResearchTemplateAgent(**base)
 
     def run(self, data: MarketData, proposals: int | None = None) -> list[CatalogEntry]:

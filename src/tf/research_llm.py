@@ -14,6 +14,7 @@ import json
 import uuid
 from typing import Any
 
+from tf.budget import BudgetExceeded
 from tf.gateway import JevClient, ModelGateway, OpenAICompatClient
 from tf.pipeline import ResearchTemplateAgent
 
@@ -59,13 +60,14 @@ class ResearchLLMAgent(ResearchTemplateAgent):
 
     @classmethod
     def from_gateway(
-        cls, gateway: ModelGateway, env: dict[str, str] | None = None, **kwargs: Any
+        cls, gateway: ModelGateway, env: dict[str, str] | None = None,
+        governor: Any | None = None, **kwargs: Any,
     ) -> "ResearchLLMAgent":
         """Construye el agente con los clientes del gateway; los que falten quedan None."""
         return cls(
             gateway=gateway,
-            generative=gateway.client_for("research-hypothesis", "generative", env=env),
-            jev=gateway.client_for("research-hypothesis", "evaluator", env=env),
+            generative=gateway.client_for("research-hypothesis", "generative", env=env, governor=governor),
+            jev=gateway.client_for("research-hypothesis", "evaluator", env=env, governor=governor),
             **kwargs,
         )
 
@@ -75,7 +77,13 @@ class ResearchLLMAgent(ResearchTemplateAgent):
         if self.generative is None:
             self._audit_failover("sin credencial del modelo generativo; uso plantilla determinista")
             return super().generate(count)
-        raw = self.generative.complete(system=SYSTEM_PROMPT, user=self._user_prompt(count or 5))
+        try:
+            raw = self.generative.complete(system=SYSTEM_PROMPT, user=self._user_prompt(count or 5))
+        except BudgetExceeded:
+            # G3: presupuesto agotado. Degradación a plantilla, no reintento: la
+            # ventana se resetea al día siguiente y el failover queda auditado.
+            self._audit_failover("presupuesto agotado (G3); uso plantilla determinista")
+            return super().generate(count)
         seeds = self._parse_proposals(raw)
         out = []
         for seed in seeds:
@@ -160,10 +168,11 @@ class ResearchLLMAgent(ResearchTemplateAgent):
         try:
             state = json.dumps({"hypothesis": seed["hypothesis"], "spec": seed["spec"]}, ensure_ascii=False)
             answers = self.jev.evaluate(state, JEV_QUESTIONS)
-        except RuntimeError as e:
+        except (RuntimeError, BudgetExceeded) as e:
             # El filtro es una optimización, no un guardarriel determinista: si el
-            # evaluador cae (sin saldo, 5xx...), se desactiva con auditoría y el
-            # pipeline sigue; las validaciones de código disponen igualmente.
+            # evaluador cae (sin saldo, 5xx, presupuesto G3 agotado...), se
+            # desactiva con auditoría y el pipeline sigue; las validaciones de
+            # código disponen igualmente.
             self._audit_failover(f"evaluador no disponible; filtro Jev desactivado: {e}")
             return True
         for name in JEV_QUESTIONS:

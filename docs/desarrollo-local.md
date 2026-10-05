@@ -83,6 +83,28 @@ hay `OPENCODE_API_KEY`) → paper day con guardarraíles → memoria persistida
 ciclo continúa con el último dato válido. En tu Mac, con Docker arriba, usa NATS y
 Postgres automáticamente; sin ellos, bus en memoria y audit SQLite.
 
+## Orquestación multiagente y controles ejecutables (Fase 6)
+
+Todo el sistema corre como host multiagente sobre el bus de eventos:
+
+- **`tf.host.AgentHost`** — cada departamento se registra con sus workers (subagentes)
+  y sus suscripciones al bus. Guardas anti-bucle obligatorias: dedup por `envelope.id`
+  (re-encolar un mensaje se audita como `agent.loop_blocked` y se descarta), colas con
+  techo (`host.queue_overflow`) y `drain(max_steps)` con paso máximo por ciclo. Un
+  worker que lanza una excepción queda como `agent.error` y no tumba el host.
+- **G3 · Presupuesto (`tf.budget.CostGovernor`)** — corta *antes* de gastar: tokens por
+  agente/día, llamadas por agente/hora y coste global del sistema/día, configurados en
+  la sección `budgets:` de `config/guardrails.yaml` (y `budget:` por agente). El estado
+  de gasto persiste en `state/budget_state.json`: reiniciar no resetea el presupuesto.
+  Los clientes del Model Gateway hacen `governor.check()` antes de cada llamada HTTP y
+  registran tokens/coste con el `usage` del proveedor después. `BudgetExceeded` degrada
+  al agente a su ruta determinista con failover auditado — nunca reintenta.
+- **K-5 · Directivas del CEO (`tf.directives`)** — `config/directivas.yaml` declara las
+  directrices (id, fecha, resumen, overrides). El scheduler aplica la vigente sobre la
+  `ValidationPolicy` al inicio de cada ciclo y lo audita como `directive.applied`; solo
+  sobreescribe campos conocidos de la política. El histórico completo vive en el audit
+  log (persistido ahora en `state/audit.db`, cadena de hash verificada en cada ciclo).
+
 ## Notas
 
 - No hay secretos en el repo: el `POSTGRES_PASSWORD` del compose es de desarrollo. Los

@@ -24,6 +24,7 @@ class ModelConfig(BaseModel):
     id: str | None = None  # id externo, p. ej. "typesafe-ai/jev" vía Vercel AI Gateway
     tier: Literal["premium", "standard", "economic"] | None = None
     input_cost_per_mtok: float | None = None
+    output_cost_per_mtok: float | None = None  # para la contabilidad del G3 (CostGovernor)
     context_window: int | None = None
     # Fase 4: proveedor real (clientes HTTP en este módulo).
     provider: Literal["vercel-ai-gateway", "opencode-go"] | None = None
@@ -110,7 +111,11 @@ class ModelGateway:
     # -- runtime: clientes reales (Fase 4) -------------------------------------
 
     def client_for(
-        self, agent: str, kind: Literal["generative", "evaluator"], env: dict[str, str] | None = None
+        self,
+        agent: str,
+        kind: Literal["generative", "evaluator"],
+        env: dict[str, str] | None = None,
+        governor: Any | None = None,   # G3: CostGovernor; corta antes de gastar y registra después
     ) -> JevClient | OpenAICompatClient | None:
         """Cliente HTTP del modelo asignado, o None si falta credencial.
 
@@ -126,10 +131,22 @@ class ModelGateway:
         if not api_key:
             return None
         if model.kind == "evaluator":
-            return JevClient(model_id=model.id or model.name, api_key=api_key, base_url=model.endpoint or VERCEL_TYPESAFE_URL)
+            return JevClient(
+                model_id=model.id or model.name, api_key=api_key,
+                base_url=model.endpoint or VERCEL_TYPESAFE_URL,
+                governor=governor, agent=agent, pricing=_pricing_of(model),
+            )
         if model.protocol == "responses":
-            return OpenAIResponsesClient(model_id=model.id or model.name, api_key=api_key, base_url=model.endpoint or "")
-        return OpenAICompatClient(model_id=model.id or model.name, api_key=api_key, base_url=model.endpoint or "")
+            return OpenAIResponsesClient(
+                model_id=model.id or model.name, api_key=api_key,
+                base_url=model.endpoint or "",
+                governor=governor, agent=agent, pricing=_pricing_of(model),
+            )
+        return OpenAICompatClient(
+            model_id=model.id or model.name, api_key=api_key,
+            base_url=model.endpoint or "",
+            governor=governor, agent=agent, pricing=_pricing_of(model),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -157,12 +174,51 @@ def _post_json(
         raise RuntimeError(f"HTTP {e.code} de {url}: {body}") from e
 
 
-def _opencode_session_headers(session_id: str) -> dict[str, str]:
-    """Cabeceras que OpenCode Go exige para enrutar y cachear prompts."""
-    return {"x-opencode-session": session_id, "User-Agent": "trading-floor/0.1"}
+def _pricing_of(model: Any) -> dict[str, float]:
+    return {
+        "input": model.input_cost_per_mtok or 0.0,
+        "output": getattr(model, "output_cost_per_mtok", None) or 0.0,
+    }
 
 
-class JevClient:
+class _ModelClient:
+    """Base de clientes HTTP: corte de presupuesto antes de la llamada (G3) y
+    registro de uso/coste después, con los tokens que devuelve el proveedor."""
+
+    def __init__(
+        self,
+        model_id: str,
+        api_key: str,
+        timeout: float,
+        governor: Any | None = None,
+        agent: str | None = None,
+        pricing: dict[str, float] | None = None,
+    ) -> None:
+        self.model_id = model_id
+        self.api_key = api_key
+        self.timeout = timeout
+        self.governor = governor
+        self.agent = agent
+        self.pricing = pricing or {"input": 0.0, "output": 0.0}
+
+    def _budget_check(self) -> None:
+        if self.governor is not None and self.agent:
+            self.governor.check(self.agent)  # BudgetExceeded ⇒ el agente degrada (failover auditado)
+
+    def _record_usage(self, usage: dict[str, Any] | None) -> None:
+        if self.governor is None or not self.agent or not usage:
+            return
+        input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+        cost = input_tokens / 1e6 * self.pricing["input"] + output_tokens / 1e6 * self.pricing["output"]
+        self.governor.record(self.agent, input_tokens, output_tokens, cost)
+
+    def _session_headers(self) -> dict[str, str]:
+        """Cabeceras que OpenCode Go exige para enrutar y cachear prompts."""
+        return {"x-opencode-session": self.session_id, "User-Agent": "trading-floor/0.1"}
+
+
+class JevClient(_ModelClient):
     """Modelo evaluador (System One) vía un endpoint TypeSafe-compatible.
 
     OpenCode Zen: https://opencode.ai/zen/v1 · Vercel AI Gateway:
@@ -171,77 +227,68 @@ class JevClient:
     (sí/no calibrado), choice (una opción de `criteria`) y score (escala ordenada).
     """
 
-    def __init__(self, model_id: str, api_key: str, base_url: str = VERCEL_TYPESAFE_URL, timeout: float = 30.0) -> None:
-        self.model_id = model_id
-        self.api_key = api_key
+    def __init__(self, model_id: str, api_key: str, base_url: str = VERCEL_TYPESAFE_URL, timeout: float = 30.0, **kwargs: Any) -> None:
+        super().__init__(model_id, api_key, timeout, **kwargs)
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
         self.session_id = uuid.uuid4().hex  # estable durante la vida del cliente
 
     def evaluate(self, state: str | dict[str, Any] | list[str], questions: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
         """Devuelve {pregunta: respuesta} tal cual el proveedor (answers map)."""
+        self._budget_check()
         payload = {"model": self.model_id, "state": state, "questions": questions}
         resp = _post_json(
-            f"{self.base_url}/systemone",
-            self.api_key,
-            payload,
-            self.timeout,
-            headers=_opencode_session_headers(self.session_id),
+            f"{self.base_url}/systemone", self.api_key, payload, self.timeout,
+            headers=self._session_headers(),
         )
+        self._record_usage(resp.get("usage"))
         return resp.get("answers", {})
 
 
-class OpenAICompatClient:
+class OpenAICompatClient(_ModelClient):
     """Modelo generativo vía API OpenAI-compatible chat/completions (GLM, Kimi, DeepSeek...)."""
 
-    def __init__(self, model_id: str, api_key: str, base_url: str, timeout: float = 60.0) -> None:
-        self.model_id = model_id
-        self.api_key = api_key
+    def __init__(self, model_id: str, api_key: str, base_url: str, timeout: float = 60.0, **kwargs: Any) -> None:
+        super().__init__(model_id, api_key, timeout, **kwargs)
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
         self.session_id = uuid.uuid4().hex  # estable durante la vida del cliente
 
     def complete(self, system: str, user: str, temperature: float = 0.7) -> str:
+        self._budget_check()
         payload = {
             "model": self.model_id,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": temperature,
         }
         resp = _post_json(
-            f"{self.base_url}/chat/completions",
-            self.api_key,
-            payload,
-            self.timeout,
-            headers=_opencode_session_headers(self.session_id),
+            f"{self.base_url}/chat/completions", self.api_key, payload, self.timeout,
+            headers=self._session_headers(),
         )
+        self._record_usage(resp.get("usage"))
         return resp["choices"][0]["message"]["content"]
 
 
-class OpenAIResponsesClient:
+class OpenAIResponsesClient(_ModelClient):
     """Modelo generativo vía la API Responses de OpenAI (GPT/Grok/Muse en OpenCode Go)."""
 
-    def __init__(self, model_id: str, api_key: str, base_url: str, timeout: float = 60.0) -> None:
-        self.model_id = model_id
-        self.api_key = api_key
+    def __init__(self, model_id: str, api_key: str, base_url: str, timeout: float = 60.0, **kwargs: Any) -> None:
+        super().__init__(model_id, api_key, timeout, **kwargs)
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
         self.session_id = uuid.uuid4().hex  # estable durante la vida del cliente
 
     def complete(self, system: str, user: str, temperature: float = 0.7) -> str:
         # GPT/Grok vía Responses rechazan 'temperature' (invalid_request_error);
         # no se envía. El muestreo queda al proveedor.
+        self._budget_check()
         payload = {
             "model": self.model_id,
             "instructions": system,
             "input": [{"role": "user", "content": [{"type": "input_text", "text": user}]}],
         }
         resp = _post_json(
-            f"{self.base_url}/responses",
-            self.api_key,
-            payload,
-            self.timeout,
-            headers=_opencode_session_headers(self.session_id),
+            f"{self.base_url}/responses", self.api_key, payload, self.timeout,
+            headers=self._session_headers(),
         )
+        self._record_usage(resp.get("usage"))
         # output es una lista de items; el texto útil viene en los de tipo message.
         parts = [
             piece["text"]

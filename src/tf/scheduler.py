@@ -30,8 +30,10 @@ from typing import Any
 from tf.audit import AuditLog
 from tf.bus import BaseBus
 from tf.datafeed import fetch_yahoo, ingest_yahoo
+from tf.directives import DirectivesBoard
 from tf.drift import DriftVerdict, StrategyPerformance, WeeklyCommittee, postmortem_lessons
 from tf.gateway import ModelGateway
+from tf.host import AgentHost
 from tf.marketdata import load_csv
 from tf.memory import MemoryStore
 from tf.paper import run_paper_session
@@ -71,14 +73,22 @@ class DailyCycle:
         gateway: ModelGateway | None = None,
         config: CycleConfig | None = None,
         policy: ValidationPolicy | None = None,
+        governor: Any | None = None,      # G3: presupuesto compartido; None = sin corte
+        directives: DirectivesBoard | None = None,  # K-5: directrices del CEO
         now: float | None = None,
     ) -> None:
         self.bus = bus
         self.audit = audit
         self.gateway = gateway
         self.config = config or CycleConfig.under(".")
-        self.policy = policy or ValidationPolicy(min_trades=30)
+        self.governor = governor
+        self.directives = directives
         self.now = now if now is not None else time.time()
+        if policy is None:
+            policy = ValidationPolicy(min_trades=30)
+            if directives is not None:  # la directiva vigente sobreescribe (K-5)
+                policy = directives.apply_to_policy(policy)
+        self.policy = policy
         self.memory = MemoryStore.load(self.config.memory_path) if self.config.memory_path.exists() else MemoryStore()
 
     # -- estado persistente del ciclo ------------------------------------------
@@ -125,6 +135,7 @@ class DailyCycle:
         runner = PipelineRunner(
             self.bus, self._permissions(), self.audit,
             policy=self.policy, memory=self.memory, gateway=self.gateway,
+            governor=self.governor,
         )
         catalog = runner.run(data)
         entries = [e.__dict__ | {"spec": e.spec} for e in catalog]
@@ -201,6 +212,33 @@ class DailyCycle:
             "phases": {},
         }
 
+        # K-5: la directiva vigente del CEO se audita al inicio de cada ciclo.
+        directive = self.directives.current() if self.directives else None
+        self.audit.append(
+            actor="scheduler", event_type="directive.applied",
+            payload={"directive_id": directive.id, "summary": directive.summary} if directive
+            else {"directive_id": None, "summary": "sin directrices cargadas"},
+        )
+
+        # G3/G7: host multiagente — los agentes del ciclo corren en departamentos
+        # sobre el bus, con drenaje acotado (anti-bucle) y colas con techo.
+        host = AgentHost(self.bus, self.audit)
+        host.register(
+            "research",
+            workers={"research-hypothesis": lambda env: None},  # el pipeline publica en su nombre; el host transporta
+            msg_types={"research-hypothesis": ["strategy.proposal.v1", "agent.heartbeat.v1"]},
+        )
+        host.register(
+            "backtest",
+            workers={"backtest-engineer": lambda env: None},
+            msg_types={"backtest-engineer": ["backtest.report.v1", "agent.heartbeat.v1"]},
+        )
+        host.register(
+            "validation",
+            workers={"validation-quant": lambda env: None},
+            msg_types={"validation-quant": ["validation.verdict.v1", "agent.heartbeat.v1"]},
+        )
+
         report["phases"]["ingesta"] = self._ingest()
 
         try:
@@ -214,6 +252,10 @@ class DailyCycle:
             self._incident("research", exc)
             research = {"catalog": [], "validated": []}
             report["phases"]["research"] = {"error": str(exc)}
+
+        # G7: drenaje acotado del host — los mensajes que el pipeline dejó en el
+        # bus se procesan aquí, con techo de pasos; nada puede buclearse eternamente.
+        report["phases"]["host"] = host.drain()
 
         sessions = self._paper_day(research["validated"])
         report["phases"]["paper_day"] = [
@@ -239,6 +281,9 @@ class DailyCycle:
 
         state["last_run"] = self.now
         self._save_state(state)
+
+        if self.governor is not None:  # G3: consumo del presupuesto en el reporte
+            report["presupuesto"] = self.governor.usage()
 
         report["audit_verificado"] = self.audit.verify() if hasattr(self.audit, "verify") else None
         report["duracion_s"] = round(time.time() - started, 2)

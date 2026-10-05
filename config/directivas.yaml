@@ -1,0 +1,17 @@
+# Directrices de dirección (K-5): la única vía por la que el CEO cambia los
+# guardarraíles operativos. El scheduler carga este fichero al inicio de cada
+# ciclo, aplica la directiva vigente (fecha máxima) sobre la ValidationPolicy
+# y audita `directive.applied`. Claves desconocidas se ignoran a nivel de
+# política (quedan en el audit log); nada aquí puede autorizar capital: eso
+# sigue siendo exclusivo de los guardarraíles deterministas de riesgo.
+
+directives:
+  - id: D-2026-001
+    date: "2026-10-05"
+    author: "CEO Tomas Rebollo"
+    summary: >
+      Directriz inicial: relajar temporalmente el mínimo de operaciones del B-4
+      (100 → 30) para que el catálogo inicial pueda validarse con la historia
+      disponible, sin tocar los umbrales de Monte Carlo ni walk-forward.
+    overrides:
+      min_trades: 30

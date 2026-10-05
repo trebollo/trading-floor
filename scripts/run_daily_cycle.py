@@ -30,9 +30,14 @@ def main() -> None:
     args = parser.parse_args()
 
     from tf.audit import SqliteAuditLog
+    from tf.budget import BudgetLimits, CostGovernor
     from tf.bus import InMemoryBus
+    from tf.directives import DirectivesBoard
     from tf.gateway import ModelGateway
     from tf.scheduler import CycleConfig, DailyCycle
+
+    gateway = ModelGateway.from_yaml(Path(__file__).parent.parent / "config" / "models.yaml")
+    config = CycleConfig.under(args.root)
 
     if port_open("localhost", 4222):
         from tf.bus_nats import NatsBus
@@ -45,17 +50,31 @@ def main() -> None:
 
         audit, audit_where = PostgresAuditLog(), "Postgres (apéndice-only)"
     else:
-        audit, audit_where = SqliteAuditLog(), "SQLite (Postgres no disponible)"
-    gateway = ModelGateway.from_yaml(Path(__file__).parent.parent / "config" / "models.yaml")
-    config = CycleConfig.under(args.root)
+        from tf.audit import SqliteAuditLog
+
+        audit_path = config.state_path.parent / "audit.db"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        audit, audit_where = SqliteAuditLog(audit_path), f"SQLite {audit_path} (Postgres no disponible)"
+    directives = DirectivesBoard.load(Path(__file__).parent.parent / "config" / "directivas.yaml")
+    guardrails = Path(__file__).parent.parent / "config" / "guardrails.yaml"
+    governor = CostGovernor(
+        limits=BudgetLimits.from_yaml(guardrails),
+        state_path=config.state_path.parent / "budget_state.json",
+        audit=audit,
+    )
     print(f"Ciclo diario — bus: {transport} · audit: {audit_where}\n" + "=" * 74)
     try:
-        report = DailyCycle(bus, audit, gateway=gateway, config=config).run(force_weekly=args.force_weekly)
+        report = DailyCycle(
+            bus, audit, gateway=gateway, config=config,
+            governor=governor, directives=directives,
+        ).run(force_weekly=args.force_weekly)
     finally:
         if transport.startswith("NATS"):
             bus.close()
 
     print(json.dumps(report["phases"], indent=2, ensure_ascii=False, default=str))
+    if report.get("presupuesto"):
+        print(f"Presupuesto G3 hoy: {json.dumps(report['presupuesto'], ensure_ascii=False)}")
     print(f"\nPortfolio en papel: {report['phases'].get('paper_day') and len(report['phases']['paper_day']) or 0} estrategias")
     print(f"Audit log íntegro: {report['audit_verificado']} · duración: {report['duracion_s']}s")
 
