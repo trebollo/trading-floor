@@ -150,11 +150,12 @@ def _post_json(url: str, api_key: str, payload: dict[str, Any], timeout: float) 
 
 
 class JevClient:
-    """Modelo evaluador (System One) vía el endpoint TypeSafe de Vercel AI Gateway.
+    """Modelo evaluador (System One) vía un endpoint TypeSafe-compatible.
 
-    Entra `state`, salen respuestas tipadas con probabilidades — Jev no genera texto.
-    Pregunta tipos: noul (sí/no calibrado), choice (una opción de `criteria`) y
-    score (escala ordenada de `criteria`).
+    OpenCode Zen: https://opencode.ai/zen/v1 · Vercel AI Gateway:
+    https://ai-gateway.vercel.sh/typesafe/v1. Entra `state`, salen respuestas
+    tipadas con probabilidades — Jev no genera texto. Pregunta tipos: noul
+    (sí/no calibrado), choice (una opción de `criteria`) y score (escala ordenada).
     """
 
     def __init__(self, model_id: str, api_key: str, base_url: str = VERCEL_TYPESAFE_URL, timeout: float = 30.0) -> None:

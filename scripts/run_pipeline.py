@@ -29,7 +29,7 @@ def main() -> None:
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="usa agentes LLM reales vía Model Gateway (requiere AI_GATEWAY_API_KEY y OPENCODE_API_KEY); "
+        help="usa agentes LLM reales vía Model Gateway (requiere OPENCODE_API_KEY); "
         "sin credenciales degrada a plantilla determinista, auditado",
     )
     args = parser.parse_args()

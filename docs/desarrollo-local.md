@@ -64,9 +64,9 @@ hablar con `localhost:5432` y `localhost:4222`.
 2. **`AuditLog` en Postgres** ✅ (`tf.audit_pg`)
 3. **Fuente de datos real** ✅ (`tf.datafeed` + `scripts/ingest_data.py`; descarga manual;
    la descarga periódica y el volcado a `market_data` vendrán con el planificador)
-4. **Agentes LLM reales** ✅ parcial (`tf.gateway` con clientes HTTP reales: Jev vía
-   Vercel AI Gateway, generativos vía OpenCode Go; `ResearchLLMAgent` en Research).
-   Exporta `AI_GATEWAY_API_KEY` y `OPENCODE_API_KEY` en tu entorno y ejecuta
+4. **Agentes LLM reales** ✅ parcial (`tf.gateway` con clientes HTTP reales: Jev y
+   generativos, todo por OpenCode Zen con una sola key, `OPENCODE_API_KEY`;
+   `ResearchLLMAgent` en Research). Exporta `OPENCODE_API_KEY` en tu entorno y ejecuta
    `uv run python scripts/run_pipeline.py --llm`. Sin credenciales, los agentes degradan
    a las plantillas deterministas y lo dejan auditado (`model.failover`).
 5. **Broker adapter** — la interfaz de `PaperBroker` es el contrato; primero otro paper

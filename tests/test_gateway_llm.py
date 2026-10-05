@@ -227,4 +227,5 @@ def test_config_models_yaml_is_valid():
 
     gw = ModelGateway.from_yaml(Path(__file__).parent.parent / "config" / "models.yaml")
     model = gw.resolve("research-hypothesis", "evaluator")
-    assert model.id == "typesafe-ai/jev"
+    assert model.id == "jev-1.13"
+    assert model.api_key_env == "OPENCODE_API_KEY"  # una sola credencial para todo

@@ -1,15 +1,17 @@
 # Model Gateway: los modelos son configuración, no código (§7.1).
 # kind: generative (escribe) | evaluator (decide — Jev, sin generación de texto).
-# provider + api_key_env: credencial leída del entorno en arranque; si falta, el
-# agente degrada a su ruta determinista y audita el failover. Sin secretos aquí.
+# Todo el tráfico va por OpenCode Zen con una sola credencial (OPENCODE_API_KEY):
+# generativos por /zen/go/v1 y Jev por /zen/v1. Queda soportado vercel-ai-gateway
+# como proveedor alternativo. Si falta la key, el agente degrada a su ruta
+# determinista y audita el failover. Sin secretos aquí.
 
 models:
   jev:
     kind: evaluator
-    id: typesafe-ai/jev          # System One de TypeSafe AI vía Vercel AI Gateway
-    provider: vercel-ai-gateway
-    endpoint: https://ai-gateway.vercel.sh/typesafe/v1
-    api_key_env: AI_GATEWAY_API_KEY
+    id: jev-1.13                 # System One de TypeSafe AI, versión fijada, vía OpenCode Zen
+    provider: opencode-go
+    endpoint: https://opencode.ai/zen/v1
+    api_key_env: OPENCODE_API_KEY
     input_cost_per_mtok: 0.042
     context_window: 32000
   frontier-strong:               # para hipótesis y análisis que exigen calidad

@@ -115,7 +115,7 @@ def test_gateway_loads_from_repo_yaml():
     config_path = Path(__file__).parent.parent / "config" / "models.yaml"
     gw = ModelGateway.from_yaml(config_path)
     # El ejemplo clave del diseño: Jev arbitra decisiones estructuradas.
-    assert gw.resolve("news-analyst", "evaluator").id == "typesafe-ai/jev"
+    assert gw.resolve("news-analyst", "evaluator").id == "jev-1.13"
     assert gw.resolve("news-analyst", "generative").tier == "economic"
     # Un agente determinista no tiene LLM en su camino.
     with pytest.raises(KeyError):
@@ -125,4 +125,4 @@ def test_gateway_loads_from_repo_yaml():
 def test_repo_yaml_matches_documented_pattern():
     raw = yaml.safe_load((Path(__file__).parent.parent / "config" / "models.yaml").read_text())
     gw = ModelGateway(GatewayConfig.model_validate(raw))
-    assert gw.resolve("risk-portfolio", "evaluator").id == "typesafe-ai/jev"
+    assert gw.resolve("risk-portfolio", "evaluator").id == "jev-1.13"
