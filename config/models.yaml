@@ -8,11 +8,11 @@
 models:
   jev:
     kind: evaluator
-    id: jev-1.13                 # System One de TypeSafe AI, versión fijada, vía OpenCode Zen
+    id: jev-1.13-free            # System One de TypeSafe AI, variante gratuita de OpenCode Zen
     provider: opencode-go
     endpoint: https://opencode.ai/zen/v1
     api_key_env: OPENCODE_API_KEY
-    input_cost_per_mtok: 0.042
+    input_cost_per_mtok: 0.0
     context_window: 32000
   frontier-strong:               # para hipótesis y análisis que exigen calidad
     kind: generative
