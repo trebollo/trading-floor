@@ -24,6 +24,7 @@ uv run pytest -q                        # 94 tests
 
 # 3) Demos end-to-end
 uv run python scripts/run_pipeline.py
+uv run python scripts/run_paper_day.py --csv data/aapl.csv   # paper trading sobre datos reales
 uv run python scripts/run_trading_day.py
 uv run python scripts/run_evolution.py
 ```
