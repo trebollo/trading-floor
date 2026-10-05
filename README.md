@@ -36,6 +36,12 @@ Gateway): rápido, ~$0.042/M tokens y sin generación de texto; la redacción co
 modelos generativos ligeros por rol (ver
 [docs/arquitectura.md §7.1](docs/arquitectura.md#71-capa-de-modelos-intercambiables-model-gateway)).
 
+## Desarrollo local
+
+El orb no tiene Docker; la infraestructura (Postgres+Timescale, NATS) se ejecuta en tu
+máquina con el CLI local de Amp. Guía completa en
+[docs/desarrollo-local.md](docs/desarrollo-local.md).
+
 ## Estado
 
 Fase de diseño.
