@@ -85,13 +85,24 @@ Postgres automáticamente; sin ellos, bus en memoria y audit SQLite.
 
 ## Orquestación multiagente y controles ejecutables (Fase 6)
 
-Todo el sistema corre como host multiagente sobre el bus de eventos:
+El pipeline es **bus-driven de verdad**: los departamentos son workers independientes
+que solo se comunican por mensajes versionados del bus:
+
+```
+research-hypothesis ──strategy.proposal.v1──► research-coder
+                                              (formaliza, publica strategy.spec.v1)
+research-coder ──strategy.spec.v1──► backtest-engineer
+                                     (DSL + backtest, publica backtest.report.v1)
+backtest-engineer ──backtest.report.v1──► validation-quant
+                                          (batería, publica validation.verdict.v1)
+```
 
 - **`tf.host.AgentHost`** — cada departamento se registra con sus workers (subagentes)
   y sus suscripciones al bus. Guardas anti-bucle obligatorias: dedup por `envelope.id`
   (re-encolar un mensaje se audita como `agent.loop_blocked` y se descarta), colas con
   techo (`host.queue_overflow`) y `drain(max_steps)` con paso máximo por ciclo. Un
-  worker que lanza una excepción queda como `agent.error` y no tumba el host.
+  worker que lanza una excepción queda como `agent.error` y no tumba el host. El
+  scheduler comparte un mismo host para todo el ciclo.
 - **G3 · Presupuesto (`tf.budget.CostGovernor`)** — corta *antes* de gastar: tokens por
   agente/día, llamadas por agente/hora y coste global del sistema/día, configurados en
   la sección `budgets:` de `config/guardrails.yaml` (y `budget:` por agente). El estado

@@ -193,6 +193,7 @@ class ResearchLLMAgent(ResearchTemplateAgent):
                 "exit_rules": "según spec",
                 "prior_risk_estimate": "0.5% por operación",
                 "cited_lesson_ids": [],
+                "spec": seed["spec"],
             },
         )
 

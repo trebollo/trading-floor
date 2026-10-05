@@ -147,6 +147,10 @@ class StrategyProposal(BaseModel):
     exit_rules: str
     prior_risk_estimate: str
     cited_lesson_ids: list[str] = []
+    spec: dict[str, Any] | None = Field(
+        default=None,
+        description="Borrador de spec DSL propuesto por research-hypothesis; research-coder lo formaliza",
+    )
 
 
 @message("strategy.spec.v1")

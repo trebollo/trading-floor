@@ -135,9 +135,10 @@ class DailyCycle:
         runner = PipelineRunner(
             self.bus, self._permissions(), self.audit,
             policy=self.policy, memory=self.memory, gateway=self.gateway,
-            governor=self.governor,
+            governor=self.governor, host=self._host,
         )
         catalog = runner.run(data)
+        self._host_stats = runner.host_stats  # G7: drenaje del host para el reporte
         entries = [e.__dict__ | {"spec": e.spec} for e in catalog]
         validated = [e for e in entries if e["final"] in ("VALIDADA", "VALIDADA_PROVISIONAL")]
         return {"catalog": entries, "validated": validated}
@@ -220,24 +221,10 @@ class DailyCycle:
             else {"directive_id": None, "summary": "sin directrices cargadas"},
         )
 
-        # G3/G7: host multiagente — los agentes del ciclo corren en departamentos
-        # sobre el bus, con drenaje acotado (anti-bucle) y colas con techo.
-        host = AgentHost(self.bus, self.audit)
-        host.register(
-            "research",
-            workers={"research-hypothesis": lambda env: None},  # el pipeline publica en su nombre; el host transporta
-            msg_types={"research-hypothesis": ["strategy.proposal.v1", "agent.heartbeat.v1"]},
-        )
-        host.register(
-            "backtest",
-            workers={"backtest-engineer": lambda env: None},
-            msg_types={"backtest-engineer": ["backtest.report.v1", "agent.heartbeat.v1"]},
-        )
-        host.register(
-            "validation",
-            workers={"validation-quant": lambda env: None},
-            msg_types={"validation-quant": ["validation.verdict.v1", "agent.heartbeat.v1"]},
-        )
+        # G3/G7: host multiagente compartido por todo el ciclo; el pipeline
+        # registra en él los workers de research/backtest/validation.
+        self._host = AgentHost(self.bus, self.audit)
+        self._host_stats: dict[str, Any] = {}
 
         report["phases"]["ingesta"] = self._ingest()
 
@@ -253,9 +240,9 @@ class DailyCycle:
             research = {"catalog": [], "validated": []}
             report["phases"]["research"] = {"error": str(exc)}
 
-        # G7: drenaje acotado del host — los mensajes que el pipeline dejó en el
-        # bus se procesan aquí, con techo de pasos; nada puede buclearse eternamente.
-        report["phases"]["host"] = host.drain()
+        # G7: drenaje acotado del host — el pipeline ya drenó su cascada
+        # (coder→backtest→validation); el reporte recoge sus estadísticas.
+        report["phases"]["host"] = self._host_stats
 
         sessions = self._paper_day(research["validated"])
         report["phases"]["paper_day"] = [

@@ -77,6 +77,40 @@ def test_memory_makes_research_skip_failed_ideas():
     assert all(entry.final != "VALIDADA" or entry.spec["type"] == "momentum" for entry in catalog2)
 
 
+def test_pipeline_is_bus_driven_without_generate():
+    """Los departamentos consumen del bus: publicar una propuesta directamente
+    (sin pasar por generate) encadena coder → backtest → validation."""
+    from tf.contracts import Actor, Envelope
+
+    data = synthetic_market(n=2000, seed=42)
+    runner = make_runner()
+    runner.run(data, proposals=0)  # registra los workers; sin propuestas
+
+    runner.bus.publish(
+        Envelope(
+            type="strategy.proposal.v1",
+            payload={
+                "proposal_id": "prop-test",
+                "hypothesis": "momentum por deriva",
+                "universe": ["SYNTH"], "timeframe": "1d",
+                "entry_rules": "según spec", "exit_rules": "según spec",
+                "prior_risk_estimate": "0.5%", "cited_lesson_ids": [],
+                "spec": {"type": "momentum", "params": {"lookback": 20, "threshold": 0.03}},
+            },
+            actor=Actor(agent="research-hypothesis", role="hypothesis", department="research"),
+        )
+    )
+    stats = runner.host.drain()
+    # proposals=0 genera las 5 semillas de plantilla + la publicada a mano.
+    assert len(runner.catalog) == 6, f"la cascada bus-driven no evaluó el spec: {stats}"
+    mine = [e for e in runner.catalog if e.spec == {"type": "momentum", "params": {"lookback": 20, "threshold": 0.03}}]
+    assert mine, "la propuesta publicada directamente no llegó al catálogo"
+    assert mine[0].final in {"VALIDADA", "VALIDADA_PROVISIONAL", "RECHAZADA_BACKTEST", "RECHAZADA_BATERIA"}
+    # La cadena completa quedó auditada y el veredicto publicado al bus.
+    types = {e.type for e in runner.bus.published}
+    assert {"strategy.proposal.v1", "strategy.spec.v1", "backtest.report.v1", "validation.verdict.v1"} <= types
+
+
 def test_research_agent_cannot_publish_outside_role():
     """El agente de research (plantilla) no puede publicar decisiones de riesgo."""
     from tf.pipeline import ResearchTemplateAgent
