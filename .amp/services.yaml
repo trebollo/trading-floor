@@ -1,0 +1,9 @@
+# Servicios del repositorio gestionados por Amp (amp orb services ensure).
+# El dashboard sirve la UI de gobierno y observabilidad; se levanta en modo
+# producción sobre el build de Next.js. Sin DATABASE_URL arranca en modo demo.
+services:
+  dashboard:
+    command: pnpm --dir dashboard start
+    port: 3100
+    title: Trading Floor — Dashboard
+    description: Dashboard CEO del sistema multiagente (datos de demo si no hay DATABASE_URL)

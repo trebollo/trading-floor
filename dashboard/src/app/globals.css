@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --color-lienzo: #060a13;
+  --color-panel: #0c1322;
+  --color-borde: #1b2740;
+  --color-acento: #34d399;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background:
+    radial-gradient(1200px 500px at 70% -10%, rgba(52, 211, 153, 0.07), transparent),
+    radial-gradient(900px 400px at 10% 0%, rgba(56, 189, 248, 0.06), transparent),
+    var(--color-lienzo);
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Scrollbar discreta para el shell oscuro */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #24304d transparent;
+}

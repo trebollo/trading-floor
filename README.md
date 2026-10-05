@@ -9,6 +9,8 @@ barrera absoluta y el CEO como única autoridad humana de gobierno.
 - [Arquitectura del sistema](docs/arquitectura.md) — diseño completo: departamentos,
   agentes, comunicación, memoria colectiva, ciclo de vida de una estrategia, stack,
   hoja de ruta y KPIs.
+- [Dashboard CEO](dashboard/README.md) — UI web de gobierno y observabilidad
+  (`dashboard/`, Next.js 15 + React 19, serverless-ready).
 
 ## Resumen en una frase
 
