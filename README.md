@@ -38,5 +38,18 @@ modelos generativos ligeros por rol (ver
 
 ## Estado
 
-Fase de diseño. La hoja de ruta de implementación (Fase 0–4) está en
-[docs/arquitectura.md §10](docs/arquitectura.md#10-hoja-de-ruta-por-fases).
+Fase de diseño.
+
+- **[Arquitectura general](docs/arquitectura.md)** — visión, departamentos, comunicación,
+  memoria colectiva, stack y hoja de ruta.
+- **[Marco de guardarraíles](docs/especificaciones/00-marco-guardarrailes.md)** y
+  **especificación por departamento**:
+  [Research Lab](docs/especificaciones/01-research-lab.md) ·
+  [Backtest](docs/especificaciones/02-backtest.md) ·
+  [Validation](docs/especificaciones/03-validation.md) ·
+  [Risk](docs/especificaciones/04-risk.md) ·
+  [Execution & Ops](docs/especificaciones/05-execution-ops.md) ·
+  [Macro & News](docs/especificaciones/06-macro-news.md) ·
+  [Dirección](docs/especificaciones/07-direccion.md).
+
+Hoja de ruta de implementación: [docs/arquitectura.md §10](docs/arquitectura.md#10-hoja-de-ruta-por-fases).
