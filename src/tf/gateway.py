@@ -228,11 +228,12 @@ class OpenAIResponsesClient:
         self.session_id = uuid.uuid4().hex  # estable durante la vida del cliente
 
     def complete(self, system: str, user: str, temperature: float = 0.7) -> str:
+        # GPT/Grok vía Responses rechazan 'temperature' (invalid_request_error);
+        # no se envía. El muestreo queda al proveedor.
         payload = {
             "model": self.model_id,
             "instructions": system,
             "input": [{"role": "user", "content": [{"type": "input_text", "text": user}]}],
-            "temperature": temperature,
         }
         resp = _post_json(
             f"{self.base_url}/responses",

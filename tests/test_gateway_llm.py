@@ -137,6 +137,7 @@ def test_responses_client_request_and_content(monkeypatch):
     url, payload, headers = fake.calls[0]
     assert url == "https://opencode.ai/zen/go/v1/responses"
     assert payload["model"] == "gpt-6-luna"
+    assert "temperature" not in payload  # gpt-6-luna lo rechaza vía Responses
     assert headers["x-opencode-session"]
     assert json.loads(out) == [{"hypothesis": "h"}]
 
