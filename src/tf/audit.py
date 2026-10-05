@@ -26,9 +26,13 @@ def entry_hash(prev_hash: str, ts: str, actor: str, event_type: str, payload: An
 
 
 class AuditEntry(dict):
-    @property
-    def seq(self) -> int:
-        return self["seq"]
+    """Entrada de auditoría: acceso dict y por atributo."""
+
+    def __getattr__(self, name: str):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name) from None
 
 
 class AuditLog:

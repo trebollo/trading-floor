@@ -56,8 +56,18 @@ class NatsBus(BaseBus):
 
         try:
             await self._js.add_stream(StreamConfig(name=self._stream, subjects=[">"]))
+        except Exception as first_error:
+            if not await self._stream_exists():
+                raise RuntimeError(
+                    f"No se pudo crear el stream JetStream '{self._stream}': {first_error}"
+                ) from first_error
+
+    async def _stream_exists(self) -> bool:
+        try:
+            await self._js.stream_info(self._stream)
+            return True
         except Exception:
-            pass  # el stream ya existe
+            return False
 
     def close(self) -> None:
         if self._nc is not None:
@@ -69,7 +79,8 @@ class NatsBus(BaseBus):
     def publish(self, envelope: Envelope) -> None:
         # G2: la misma validación en el borde que el bus en memoria.
         validate_payload(envelope.type, envelope.payload)
-        self._run_coro(self._js.publish(envelope.type, envelope_to_json(envelope)))
+        # stream explícito: sin búsqueda por subject que pueda fallar.
+        self._run_coro(self._js.publish(envelope.type, envelope_to_json(envelope), stream=self._stream))
 
     def subscribe(self, msg_type: str, handler: Handler) -> None:
         self._handlers[msg_type].append(handler)
@@ -80,7 +91,7 @@ class NatsBus(BaseBus):
                 for h in self._handlers.get(envelope.type, []):
                     h(envelope)
 
-            await self._js.subscribe(msg_type, cb=cb)
+            await self._js.subscribe(msg_type, cb=cb, stream=self._stream)
 
         self._run_coro(_subscribe())
 

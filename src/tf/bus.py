@@ -23,6 +23,11 @@ class BaseBus(ABC):
     @abstractmethod
     def subscribe(self, msg_type: str, handler: Handler) -> None: ...
 
+    def publish_raw(self, msg_type: str, payload: dict[str, Any], **envelope_kwargs: Any) -> Envelope:
+        env = Envelope(type=msg_type, payload=payload, **envelope_kwargs)
+        self.publish(env)
+        return env
+
 
 class InMemoryBus(BaseBus):
     """Despacho síncrono en orden de suscripción. Valida el payload al publicar."""
@@ -35,13 +40,8 @@ class InMemoryBus(BaseBus):
         self._handlers[msg_type].append(handler)
 
     def publish(self, envelope: Envelope) -> None:
-        # G2: nada entra al bus sin cumplir su contrato.
+        # G2: la misma validación en el borde que el bus en memoria.
         validate_payload(envelope.type, envelope.payload)
         self.published.append(envelope)
         for handler in self._handlers.get(envelope.type, []):
             handler(envelope)
-
-    def publish_raw(self, msg_type: str, payload: dict[str, Any], **envelope_kwargs: Any) -> Envelope:
-        env = Envelope(type=msg_type, payload=payload, **envelope_kwargs)
-        self.publish(env)
-        return env
