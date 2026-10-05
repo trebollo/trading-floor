@@ -28,6 +28,17 @@ uv run python scripts/run_trading_day.py
 uv run python scripts/run_evolution.py
 ```
 
+## Datos reales (Yahoo Finance, sin API key)
+
+```bash
+uv run python scripts/ingest_data.py AAPL '^GSPC' --start 20150101   # → data/aapl.csv, data/^gspc.csv
+uv run python scripts/run_pipeline.py --csv data/aapl.csv            # pipeline completo sobre datos reales
+```
+
+Los CSV quedan en `data/` (ignorado por git) en formato `ts,open,high,low,close` y se
+validan (OHLC coherente) antes de escribirse. `tf.datafeed` es la única pieza que habla
+con la red; el resto del sistema sigue leyendo vía `tf.marketdata.load_csv` (G4/B-6).
+
 ## Verificar la infra a mano
 
 ```bash
@@ -49,10 +60,10 @@ hablar con `localhost:5432` y `localhost:4222`.
 
 ## Qué queda pendiente de la Fase 4 y en qué orden
 
-1. **Adaptador NATS de `tf.bus.BaseBus`** — la interfaz ya está fijada; solo transporte.
-2. **`AuditLog` en Postgres** — el hash encadenado ya está probado sobre SQLite.
-3. **Fuente de datos real** — `tf.marketdata.load_csv` está listo; añadir descarga
-   periódica (p. ej. proveedor de barras diarias) y volcado a `market_data`.
+1. **Adaptador NATS de `tf.bus.BaseBus`** ✅ (`tf.bus_nats`)
+2. **`AuditLog` en Postgres** ✅ (`tf.audit_pg`)
+3. **Fuente de datos real** ✅ (`tf.datafeed` + `scripts/ingest_data.py`; descarga manual;
+   la descarga periódica y el volcado a `market_data` vendrán con el planificador)
 4. **Agentes LLM reales** — Model Gateway + proveedores (Jev para decisiones vía Vercel
    AI Gateway; generativos por rol) sustituyendo las plantillas de Research.
 5. **Broker adapter** — la interfaz de `PaperBroker` es el contrato; primero otro paper

@@ -1,9 +1,11 @@
 """Demo Fase 1: pipeline Research → Backtest → Validation end-to-end.
 
-Ejecuta: uv run python scripts/run_pipeline.py
+Ejecuta: uv run python scripts/run_pipeline.py                (datos sintéticos)
+         uv run python scripts/run_pipeline.py --csv data/aapl.csv   (datos reales)
 Salida: catálogo de estrategias evaluadas (JSON) y eventos del audit log.
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -12,14 +14,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from tf.audit import SqliteAuditLog
 from tf.bus import InMemoryBus
-from tf.marketdata import synthetic_market
+from tf.marketdata import load_csv, synthetic_market
 from tf.permissions import PermissionBroker
 from tf.pipeline import PipelineRunner
 from tf.validation import ValidationPolicy
 
 
 def main() -> None:
-    data = synthetic_market(n=2000, seed=42)
+    parser = argparse.ArgumentParser(description="Pipeline Research → Backtest → Validation")
+    parser.add_argument(
+        "--csv", help="CSV de datos reales (ts,open,high,low,close); por defecto, sintético"
+    )
+    args = parser.parse_args()
+
+    if args.csv:
+        data = load_csv(Path(args.csv))
+        print(f"Datos reales: {data.symbol}, {len(data)} barras")
+    else:
+        data = synthetic_market(n=2000, seed=42)
     bus = InMemoryBus()
     audit = SqliteAuditLog()
     broker = PermissionBroker.from_yaml(Path(__file__).parent.parent / "config" / "guardrails.yaml", audit=audit)
