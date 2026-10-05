@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from tf.audit import SqliteAuditLog
 from tf.bus import InMemoryBus
+from tf.gateway import ModelGateway
 from tf.marketdata import load_csv, synthetic_market
 from tf.permissions import PermissionBroker
 from tf.pipeline import PipelineRunner
@@ -25,8 +26,15 @@ def main() -> None:
     parser.add_argument(
         "--csv", help="CSV de datos reales (ts,open,high,low,close); por defecto, sintético"
     )
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="usa agentes LLM reales vía Model Gateway (requiere AI_GATEWAY_API_KEY y OPENCODE_API_KEY); "
+        "sin credenciales degrada a plantilla determinista, auditado",
+    )
     args = parser.parse_args()
 
+    gateway = ModelGateway.from_yaml(Path(__file__).parent.parent / "config" / "models.yaml") if args.llm else None
     if args.csv:
         data = load_csv(Path(args.csv))
         print(f"Datos reales: {data.symbol}, {len(data)} barras")
@@ -36,7 +44,7 @@ def main() -> None:
     audit = SqliteAuditLog()
     broker = PermissionBroker.from_yaml(Path(__file__).parent.parent / "config" / "guardrails.yaml", audit=audit)
 
-    runner = PipelineRunner(bus, broker, audit, policy=ValidationPolicy(min_trades=30))
+    runner = PipelineRunner(bus, broker, audit, policy=ValidationPolicy(min_trades=30), gateway=gateway)
     catalog = runner.run(data)
 
     print(f"\nCatálogo: {len(catalog)} estrategias evaluadas\n" + "=" * 72)

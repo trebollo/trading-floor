@@ -24,6 +24,10 @@ class ModelConfig(BaseModel):
     tier: Literal["premium", "standard", "economic"] | None = None
     input_cost_per_mtok: float | None = None
     context_window: int | None = None
+    # Fase 4: proveedor real (clientes HTTP en este módulo).
+    provider: Literal["vercel-ai-gateway", "opencode-go"] | None = None
+    endpoint: str | None = None  # base URL de la API
+    api_key_env: str | None = None  # variable de entorno con la credencial
 
     @model_validator(mode="after")
     def _external_id_for_evaluator(self) -> "ModelConfig":
@@ -94,9 +98,92 @@ class ModelGateway:
         return self._config.models[model_name]
 
     def record_failover(self, agent: str, from_model: str, reason: str, bus: Any | None = None) -> None:
-        """Failover registrado como evento (auditado). Fase 0: solo publica el evento."""
+        """Failover registrado como evento (auditado)."""
         if bus is not None:
             bus.publish_raw(
                 "model.failover.v1",
                 {"agent": agent, "from_model": from_model, "to_model": None, "reason": reason},
             )
+
+    # -- runtime: clientes reales (Fase 4) -------------------------------------
+
+    def client_for(
+        self, agent: str, kind: Literal["generative", "evaluator"], env: dict[str, str] | None = None
+    ) -> JevClient | OpenAICompatClient | None:
+        """Cliente HTTP del modelo asignado, o None si falta credencial.
+
+        None nunca se ignora en silencio: el agente que lo recibe debe degradar a su
+        ruta determinista y auditar el failover (contrato de Fase 0).
+        """
+        import os
+
+        model = self.resolve(agent, kind)
+        if model.provider is None or model.api_key_env is None:
+            return None  # modelo declarado sin proveedor real: ruta determinista
+        api_key = (env or os.environ).get(model.api_key_env, "")
+        if not api_key:
+            return None
+        if model.kind == "evaluator":
+            return JevClient(model_id=model.id or model.name, api_key=api_key, base_url=model.endpoint or VERCEL_TYPESAFE_URL)
+        return OpenAICompatClient(model_id=model.id or model.name, api_key=api_key, base_url=model.endpoint or "")
+
+
+# ---------------------------------------------------------------------------
+# Clientes HTTP de proveedores reales (Fase 4). Sin dependencias externas.
+# ---------------------------------------------------------------------------
+
+VERCEL_TYPESAFE_URL = "https://ai-gateway.vercel.sh/typesafe/v1"
+
+
+def _post_json(url: str, api_key: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        data=_json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return _json.loads(resp.read().decode())
+
+
+class JevClient:
+    """Modelo evaluador (System One) vía el endpoint TypeSafe de Vercel AI Gateway.
+
+    Entra `state`, salen respuestas tipadas con probabilidades — Jev no genera texto.
+    Pregunta tipos: noul (sí/no calibrado), choice (una opción de `criteria`) y
+    score (escala ordenada de `criteria`).
+    """
+
+    def __init__(self, model_id: str, api_key: str, base_url: str = VERCEL_TYPESAFE_URL, timeout: float = 30.0) -> None:
+        self.model_id = model_id
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    def evaluate(self, state: str | dict[str, Any] | list[str], questions: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Devuelve {pregunta: respuesta} tal cual el proveedor (answers map)."""
+        payload = {"model": self.model_id, "state": state, "questions": questions}
+        resp = _post_json(f"{self.base_url}/systemone", self.api_key, payload, self.timeout)
+        return resp.get("answers", {})
+
+
+class OpenAICompatClient:
+    """Modelo generativo vía API OpenAI-compatible (OpenCode Go: /zen/go/v1)."""
+
+    def __init__(self, model_id: str, api_key: str, base_url: str, timeout: float = 60.0) -> None:
+        self.model_id = model_id
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    def complete(self, system: str, user: str, temperature: float = 0.7) -> str:
+        payload = {
+            "model": self.model_id,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "temperature": temperature,
+        }
+        resp = _post_json(f"{self.base_url}/chat/completions", self.api_key, payload, self.timeout)
+        return resp["choices"][0]["message"]["content"]

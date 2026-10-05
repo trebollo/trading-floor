@@ -35,6 +35,8 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
             raise SpecError(f"parámetro '{key}' debe ser numérico")
         if not np.isfinite(value):
             raise SpecError(f"parámetro '{key}' no finito")
+    if spec["type"] == "sma_cross" and int(params["fast_window"]) >= int(params["slow_window"]):
+        raise SpecError("fast_window debe ser menor que slow_window")
     return spec
 
 
@@ -52,8 +54,6 @@ def sma(close: np.ndarray, window: int) -> np.ndarray:
 def _sma_cross_signals(close: np.ndarray, params: dict[str, float]) -> np.ndarray:
     fast = sma(close, int(params["fast_window"]))
     slow = sma(close, int(params["slow_window"]))
-    if int(params["fast_window"]) >= int(params["slow_window"]):
-        raise SpecError("fast_window debe ser menor que slow_window")
     position = np.where(np.isnan(fast) | np.isnan(slow), 0.0, np.where(fast > slow, 1.0, 0.0))
     return position
 

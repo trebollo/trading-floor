@@ -16,6 +16,7 @@ from tf.bus import BaseBus
 from tf.contracts import Envelope
 from tf.dsl import validate_spec, SpecError
 from tf.engine import DEFAULT_COSTS, run_backtest
+from tf.gateway import ModelGateway
 from tf.marketdata import MarketData
 from tf.memory import LessonExtractor, MemoryStore, cosine, embed
 from tf.permissions import PermissionBroker
@@ -162,6 +163,7 @@ class PipelineRunner:
         policy: ValidationPolicy = ValidationPolicy(),
         backtest_promotion_sharpe: float = 0.5,
         memory: MemoryStore | None = None,
+        gateway: ModelGateway | None = None,
     ) -> None:
         self.bus = bus
         self.broker = broker
@@ -169,17 +171,20 @@ class PipelineRunner:
         self.policy = policy
         self.backtest_promotion_sharpe = backtest_promotion_sharpe
         self.memory = memory
+        self.gateway = gateway
         self.catalog: list[CatalogEntry] = []
 
+    def _hypothesis_agent(self) -> ResearchTemplateAgent:
+        """research-hypothesis: LLM real si hay gateway, plantilla determinista si no."""
+        base = dict(name="research-hypothesis", role="hypothesis", bus=self.bus, broker=self.broker, audit=self.audit, memory=self.memory)
+        if self.gateway is not None:
+            from tf.research_llm import ResearchLLMAgent
+
+            return ResearchLLMAgent.from_gateway(self.gateway, **base)
+        return ResearchTemplateAgent(**base)
+
     def run(self, data: MarketData, proposals: int | None = None) -> list[CatalogEntry]:
-        hypothesis_agent = ResearchTemplateAgent(
-            name="research-hypothesis",
-            role="hypothesis",
-            bus=self.bus,
-            broker=self.broker,
-            audit=self.audit,
-            memory=self.memory,
-        )
+        hypothesis_agent = self._hypothesis_agent()
         coder_agent = ResearchCoderAgent(
             name="research-coder",
             role="coder",
