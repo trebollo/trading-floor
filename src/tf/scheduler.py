@@ -76,6 +76,7 @@ class DailyCycle:
         policy: ValidationPolicy | None = None,
         governor: Any | None = None,      # G3: presupuesto compartido; None = sin corte
         directives: DirectivesBoard | None = None,  # K-5: directrices del CEO
+        news_config: dict[str, Any] | None = None,  # None = config/news.yaml; {} = offline (tests)
         now: float | None = None,
     ) -> None:
         self.bus = bus
@@ -84,6 +85,7 @@ class DailyCycle:
         self.config = config or CycleConfig.under(".")
         self.governor = governor
         self.directives = directives
+        self.news_config = news_config
         self.now = now if now is not None else time.time()
         if policy is None:
             policy = ValidationPolicy(min_trades=30)
@@ -143,6 +145,27 @@ class DailyCycle:
         entries = [e.__dict__ | {"spec": e.spec} for e in catalog]
         validated = [e for e in entries if e["final"] in ("VALIDADA", "VALIDADA_PROVISIONAL")]
         return {"catalog": entries, "validated": validated}
+
+    def _news(self) -> dict[str, Any]:
+        """Ingesta de noticias con filtro Jev. Fallo de fuente ⇒ incidente, se sigue."""
+        from tf.news import build_news_agent, load_feed_config
+
+        # news_config: None → config/news.yaml; {} → offline (tests); dict → tal cual.
+        root = Path(__file__).resolve().parents[2]
+        feed_config = self.news_config if self.news_config is not None else load_feed_config(root / "config" / "news.yaml")
+        if not feed_config or not any(feed_config.get(k) for k in ("gdelt", "finnhub", "rss")):
+            return {"alerts": 0, "detail": "news sin fuentes (offline)"}
+        try:
+            agent = build_news_agent(
+                self.gateway, feed_config, governor=self.governor,
+                name="news-analyst", role="news", bus=self.bus,
+                broker=self._permissions(), audit=self.audit, now=self.now,
+            )
+            alerts = agent.ingest()
+            return {"alerts": len(alerts), "categories": [a.payload["category"] for a in alerts]}
+        except Exception as exc:
+            self._incident("news", exc)
+            return {"alerts": 0, "error": str(exc)}
 
     def _paper_day(self, validated: list[dict[str, Any]]) -> list[dict[str, Any]]:
         csv_path = self.config.data_dir / f"{self.config.primary.lower()}.csv"
@@ -249,6 +272,9 @@ class DailyCycle:
                 self._macro.emit_regime(load_csv(csv_path).close)
             except Exception as exc:
                 self._incident("macro", exc)
+
+        # Departamento news: ingesta multi-fuente → filtro Jev → news.alert.v1.
+        report["phases"]["news"] = self._news()
 
         try:
             research = self._research()

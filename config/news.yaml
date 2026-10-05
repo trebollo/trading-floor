@@ -1,0 +1,18 @@
+# Departamento de news (Fase 7): fuentes gratuitas del news-analyst.
+# Sin secretos aquí: la key de Finnhub va en el entorno (FINNHUB_API_KEY).
+# Si una fuente falla, se audita como incidente y el ciclo continúa con el resto.
+
+lookback_hours: 24        # ventana: nada más viejo entra
+max_alerts_per_source: 10 # techo por fuente y ciclo (G3: evitar ruido y coste)
+
+gdelt:
+  query: "(stock market OR inflation OR central bank OR geopolitical OR sanctions OR war)"
+  maxrecords: 25
+
+finnhub:
+  category: general
+  api_key_env: FINNHUB_API_KEY   # key gratuita; si falta, la fuente se omite
+
+rss:
+  - https://www.federalreserve.gov/feeds/press_all.xml
+  - https://www.ecb.europa.eu/rss/press.html

@@ -183,7 +183,7 @@ class ChiefOfStaffAgent(Agent):
     """Departamento ejecutivo: tally del ciclo e informe diario para el CEO."""
 
     department = "executive"
-    subscriptions: tuple[str, ...] = ("validation.verdict.v1", "ops.incident.v1", "macro.regime.v1")
+    subscriptions: tuple[str, ...] = ("validation.verdict.v1", "ops.incident.v1", "macro.regime.v1", "news.alert.v1")
 
     def __init__(self, tally: dict[str, int], **kwargs: Any) -> None:
         super().__init__(**kwargs)

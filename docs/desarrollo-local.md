@@ -109,9 +109,19 @@ chief-of-staff ──executive.daily_report.v1──► informe del ciclo para e
 
 Cada sesión de paper trading crea su propio bus con los departamentos de riesgo y
 ejecución: **toda orden pasa por el gate determinista vía bus**; sin decisión de
-riesgo no hay ejecución (fail-closed). El departamento de news queda pendiente de
-una fuente real (RSS/API); hoy el régimen lo calcula `macro-analyst` de forma
-determinista (precio vs SMA200).
+riesgo no hay ejecución (fail-closed).
+
+**News (Fase 7, `tf/news.py`)** — el news-analyst ingesta fuentes gratuitas al inicio
+del ciclo: GDELT (geopolítica, sin key), Finnhub market news (key gratuita en
+`FINNHUB_API_KEY`) y RSS oficiales (Fed, ECB; lista en `config/news.yaml`). Flujo:
+fetch (con reintento por 429/5xx) → dedup por URL y titular → clasificación
+determinista (`TAIL_RISK` por palabras clave, corroborada si ≥2 fuentes) → filtro
+Jev de relevancia (`jev-1.13-free`, coste cero) → `news.alert.v1` al bus, que el
+chief-of-staff contabiliza en el informe diario. Sin Jev disponible: confianza
+penalizada ×0.7 y failover auditado (M-3) — el filtro es optimización, no
+guardarrail. Guardarraíles M-1 (nunca publica órdenes/veredictos, impuesto por G1)
+y M-2 (single-source no escala a acción). Fuente caída ⇒ `ops.incident` y el ciclo
+continúa. Nota: GDELT bloquea IPs de datacenter (orbs); en tu Mac funciona.
 
 - **`tf.host.AgentHost`** — cada departamento se registra con sus workers (subagentes)
   y sus suscripciones al bus. Guardas anti-bucle obligatorias: dedup por `envelope.id`

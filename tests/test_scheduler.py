@@ -54,7 +54,7 @@ def test_memory_save_load_roundtrip(tmp_path):
 def test_daily_cycle_end_to_end_offline(tmp_path):
     write_csv(tmp_path)
     audit = SqliteAuditLog()
-    cycle = DailyCycle(InMemoryBus(), audit, config=make_config(tmp_path), now=1_000_000.0)
+    cycle = DailyCycle(InMemoryBus(), audit, config=make_config(tmp_path), news_config={}, now=1_000_000.0)
 
     report = cycle.run(force_weekly=True)
 
@@ -79,7 +79,7 @@ def test_daily_cycle_end_to_end_offline(tmp_path):
 def test_daily_cycle_persists_collective_memory(tmp_path):
     write_csv(tmp_path)
     config = make_config(tmp_path)
-    cycle = DailyCycle(InMemoryBus(), SqliteAuditLog(), config=config, now=1_000_000.0)
+    cycle = DailyCycle(InMemoryBus(), SqliteAuditLog(), config=config, news_config={}, now=1_000_000.0)
     cycle.run()
 
     assert (config.memory_path).exists()
@@ -88,7 +88,7 @@ def test_daily_cycle_persists_collective_memory(tmp_path):
     assert len(persisted.evaluations) > 0
 
     # Segundo ciclo: parte de la memoria cargada (no se pierde ni se duplica el aprendido).
-    cycle2 = DailyCycle(InMemoryBus(), SqliteAuditLog(), config=config, now=2_000_000.0)
+    cycle2 = DailyCycle(InMemoryBus(), SqliteAuditLog(), config=config, news_config={}, now=2_000_000.0)
     assert len(cycle2.memory.evaluations) == len(persisted.evaluations)
     cycle2.run()
     assert len(cycle2.memory.evaluations) >= len(persisted.evaluations)
@@ -97,12 +97,12 @@ def test_daily_cycle_persists_collective_memory(tmp_path):
 def test_committee_not_due_within_week(tmp_path):
     write_csv(tmp_path)
     config = make_config(tmp_path)
-    cycle = DailyCycle(InMemoryBus(), SqliteAuditLog(), config=config, now=1_000_000.0)
+    cycle = DailyCycle(InMemoryBus(), SqliteAuditLog(), config=config, news_config={}, now=1_000_000.0)
     report = cycle.run()  # primer ciclo: comité programado por defecto
     assert report["phases"]["comite_programado"] is True
 
     # Segundo ciclo un día después: no toca comité.
-    cycle2 = DailyCycle(InMemoryBus(), SqliteAuditLog(), config=config, now=1_000_000.0 + 86_400)
+    cycle2 = DailyCycle(InMemoryBus(), SqliteAuditLog(), config=config, news_config={}, now=1_000_000.0 + 86_400)
     report2 = cycle2.run()
     assert report2["phases"]["comite_programado"] is False
 
@@ -111,7 +111,7 @@ def test_research_phase_failure_is_incident_not_crash(tmp_path):
     # Sin CSV y sin red: research debe caer como incidente y el ciclo terminar.
     config = make_config(tmp_path)  # data/ vacío
     audit = SqliteAuditLog()
-    cycle = DailyCycle(InMemoryBus(), audit, config=config, now=1_000_000.0)
+    cycle = DailyCycle(InMemoryBus(), audit, config=config, news_config={}, now=1_000_000.0)
 
     report = cycle.run()
 
