@@ -56,6 +56,15 @@ Hoja de ruta de implementación: [docs/arquitectura.md §10](docs/arquitectura.m
 
 ## Implementación
 
-- **Fase 0 (cimientos)** — implementada y testeada (32 tests). Ver
-  [docs/fase0.md](docs/fase0.md): contratos de mensajes, bus con validación en el borde,
-  Permission Broker, Model Gateway, esqueleto de agentes y audit log con hash encadenado.
+- **Fase 0 (cimientos)** — implementada y testeada. Ver [docs/fase0.md](docs/fase0.md):
+  contratos de mensajes, bus con validación en el borde, Permission Broker, Model
+  Gateway, esqueleto de agentes y audit log con hash encadenado.
+- **Fase 1 (pipeline de investigación)** — implementada y testeada (55 tests). Ver
+  [docs/fase1.md](docs/fase1.md): DSL restringido, motor de backtest anti-look-ahead,
+  batería canónica completa (Monte Carlo, walk-forward, régimen, sensibilidad, costes,
+  correlación) y catálogo de estrategias evaluadas end-to-end.
+
+```bash
+uv sync && uv run pytest -q        # 55 tests
+uv run python scripts/run_pipeline.py   # demo end-to-end
+```

@@ -16,6 +16,13 @@ agents:
       tokens_per_day: 2000000
       compute_minutes_per_day: 120
 
+  research-coder:
+    department: research
+    role: coder
+    tools: [strategy_api_docs, validate_spec, run_python_sandbox]
+    outputs: [strategy.spec.v1, agent.heartbeat.v1]
+    data_domains: [proposals, market_history, lessons]
+
   research-curator:
     department: research
     role: curator
