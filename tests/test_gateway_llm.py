@@ -1,5 +1,6 @@
 """Tests del Model Gateway con proveedores reales (offline: HTTP simulado)."""
 
+import io
 import json
 
 import pytest
@@ -101,6 +102,21 @@ def test_generative_client_request_and_content(monkeypatch):
     assert url == "https://opencode.ai/zen/go/v1/chat/completions"
     assert payload["model"] == "gpt-6-luna"
     assert json.loads(out) == [{"hypothesis": "h"}]
+
+
+def test_post_json_surfaces_http_error_body(monkeypatch):
+    import urllib.error
+
+    from tf import gateway
+
+    def fake_urlopen(req, timeout):
+        raise urllib.error.HTTPError(
+            req.full_url, 403, "Forbidden", {}, io.BytesIO(b'{"error":{"message":"model not enabled for this plan"}}')
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match="403.*model not enabled"):
+        gateway._post_json("https://x/v1/chat/completions", "k", {}, timeout=5)
 
 
 # ---------------------------------------------------------------------------

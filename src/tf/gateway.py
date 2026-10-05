@@ -137,6 +137,7 @@ VERCEL_TYPESAFE_URL = "https://ai-gateway.vercel.sh/typesafe/v1"
 
 def _post_json(url: str, api_key: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
     import json as _json
+    import urllib.error
     import urllib.request
 
     req = urllib.request.Request(
@@ -145,8 +146,13 @@ def _post_json(url: str, api_key: str, payload: dict[str, Any], timeout: float) 
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return _json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return _json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        # El motivo real (plan sin acceso, modelo deshabilitado, auth...) va en el cuerpo.
+        body = e.read().decode(errors="replace")[:500]
+        raise RuntimeError(f"HTTP {e.code} de {url}: {body}") from e
 
 
 class JevClient:
