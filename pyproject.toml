@@ -7,6 +7,8 @@ dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "numpy>=1.26",
+    "nats-py>=2.9",
+    "psycopg[binary]>=3.2",
 ]
 
 [dependency-groups]
@@ -23,3 +25,4 @@ packages = ["src/tf"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["infra: tests de integración con infraestructura (NATS/Postgres)"]
