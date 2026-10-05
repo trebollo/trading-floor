@@ -23,6 +23,7 @@ uv sync
 uv run pytest -q                        # 94 tests
 
 # 3) Demos end-to-end
+uv run python scripts/run_daily_cycle.py    # sistema vivo: ciclo diario completo
 uv run python scripts/run_pipeline.py
 uv run python scripts/run_paper_day.py --csv data/aapl.csv   # paper trading sobre datos reales
 uv run python scripts/run_trading_day.py
@@ -72,6 +73,15 @@ hablar con `localhost:5432` y `localhost:4222`.
    a las plantillas deterministas y lo dejan auditado (`model.failover`).
 5. **Broker adapter** — la interfaz de `PaperBroker` es el contrato; primero otro paper
    broker contra datos reales, luego el real con capital reducido.
+
+## Fase 5: sistema vivo
+
+`tf.scheduler.DailyCycle` orquesta el ciclo: ingesta (Yahoo) → research (LLM reales si
+hay `OPENCODE_API_KEY`) → paper day con guardarraíles → memoria persistida
+(`state/memory.json`) → comité semanal de drift (automático si ha pasado una semana;
+`--force-weekly` lo fuerza). Una fase que falla queda auditada como `ops.incident` y el
+ciclo continúa con el último dato válido. En tu Mac, con Docker arriba, usa NATS y
+Postgres automáticamente; sin ellos, bus en memoria y audit SQLite.
 
 ## Notas
 

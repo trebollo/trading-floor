@@ -14,6 +14,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 EMBED_DIM = 256
@@ -157,6 +158,39 @@ class MemoryStore:
     def is_family_locked(self, spec: dict[str, Any], max_rejections: int = 3) -> bool:
         """R-5: familia con 3+ fracasos de validación ⇒ bloqueada hasta directriz del CEO."""
         return len(self.family_rejections(spec)) >= max_rejections
+
+    # -- persistencia (memoria colectiva que sobrevive reinicios; auditoría aparte) --
+
+    def save(self, path: str | Path) -> None:
+        data = {
+            "lessons": [
+                {
+                    **{k: v for k, v in l.__dict__.items() if k != "embedding"},
+                    "embedding": {str(k): v for k, v in l.embedding.items()},
+                }
+                for l in self.lessons
+            ],
+            "evaluations": [e.__dict__ for e in self.evaluations],
+        }
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+    @classmethod
+    def load(cls, path: str | Path) -> "MemoryStore":
+        raw = json.loads(Path(path).read_text())
+        store = cls()
+        for l in raw.get("lessons", []):
+            lesson = Lesson(
+                id=l["id"], content=l["content"], tags=l["tags"],
+                source_evaluation_id=l.get("source_evaluation_id"),
+                family_key=l.get("family_key"),
+                embedding={int(k): v for k, v in l["embedding"].items()},
+                times_referenced=l.get("times_referenced", 0),
+                created_at=l.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            )
+            store.lessons.append(lesson)
+        for e in raw.get("evaluations", []):
+            store.evaluations.append(EvaluationRecord(**e))
+        return store
 
 
 # ---------------------------------------------------------------------------
