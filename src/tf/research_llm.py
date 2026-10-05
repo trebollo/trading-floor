@@ -157,8 +157,15 @@ class ResearchLLMAgent(ResearchTemplateAgent):
         if self.jev is None:
             self._audit_failover("sin credencial del modelo evaluador (Jev); filtro Jev desactivado")
             return True  # sin evaluador no se bloquea: la validación determinista sigue después
-        state = json.dumps({"hypothesis": seed["hypothesis"], "spec": seed["spec"]}, ensure_ascii=False)
-        answers = self.jev.evaluate(state, JEV_QUESTIONS)
+        try:
+            state = json.dumps({"hypothesis": seed["hypothesis"], "spec": seed["spec"]}, ensure_ascii=False)
+            answers = self.jev.evaluate(state, JEV_QUESTIONS)
+        except RuntimeError as e:
+            # El filtro es una optimización, no un guardarriel determinista: si el
+            # evaluador cae (sin saldo, 5xx...), se desactiva con auditoría y el
+            # pipeline sigue; las validaciones de código disponen igualmente.
+            self._audit_failover(f"evaluador no disponible; filtro Jev desactivado: {e}")
+            return True
         for name in JEV_QUESTIONS:
             noul = answers.get(name, {}).get("noul")
             if noul is not None and noul < NOUL_THRESHOLD:

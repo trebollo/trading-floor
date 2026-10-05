@@ -256,6 +256,20 @@ def test_llm_agent_without_evaluator_does_not_block_but_audits():
     assert any("Jev" in e["payload"]["reason"] for e in failovers)
 
 
+def test_llm_agent_degrades_when_jev_endpoint_fails():
+    bus, audit, broker = make_deps()
+
+    class BrokenJev:
+        def evaluate(self, state, questions):
+            raise RuntimeError("HTTP 402 de https://opencode.ai/zen/v1/systemone: Insufficient account funds")
+
+    agent = make_llm_agent(FakeGenerative(LLM_RESPONSE), BrokenJev(), audit, bus, broker)
+    out = agent.generate()
+    assert len(out) == 2  # el fallo del evaluador no tumba el pipeline
+    failovers = [e for e in audit.entries() if e["event_type"] == "model.failover"]
+    assert any("402" in e["payload"]["reason"] for e in failovers)
+
+
 def test_llm_agent_without_generative_falls_back_to_template():
     bus, audit, broker = make_deps()
     agent = make_llm_agent(None, None, audit, bus, broker)
