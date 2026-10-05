@@ -36,7 +36,13 @@ def main() -> None:
 
     gateway = ModelGateway.from_yaml(Path(__file__).parent.parent / "config" / "models.yaml") if args.llm else None
     if args.csv:
-        data = load_csv(Path(args.csv))
+        csv_path = Path(args.csv)
+        if not csv_path.exists():
+            parser.error(
+                f"no existe {csv_path}. Descarga primero los datos: "
+                f"uv run python scripts/ingest_data.py {csv_path.stem.upper()} --start 20150101"
+            )
+        data = load_csv(csv_path)
         print(f"Datos reales: {data.symbol}, {len(data)} barras")
     else:
         data = synthetic_market(n=2000, seed=42)
