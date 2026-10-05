@@ -17,7 +17,7 @@ from collections import defaultdict
 from typing import Any
 
 from tf.bus import BaseBus, Handler
-from tf.contracts import Envelope, validate_payload
+from tf.contracts import REGISTRY, Envelope, validate_payload
 
 
 def envelope_to_json(envelope: Envelope) -> bytes:
@@ -54,8 +54,12 @@ class NatsBus(BaseBus):
         self._js = self._nc.jetstream()
         from nats.js.api import StreamConfig
 
+        # El subject global ">" exige no_ack=True en JetStream (err 10052); en su lugar
+        # declaramos los subjects concretos del registro de contratos.
         try:
-            await self._js.add_stream(StreamConfig(name=self._stream, subjects=[">"]))
+            await self._js.add_stream(
+                StreamConfig(name=self._stream, subjects=sorted(REGISTRY.keys()))
+            )
         except Exception as first_error:
             if not await self._stream_exists():
                 raise RuntimeError(
