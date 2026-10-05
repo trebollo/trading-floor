@@ -1,0 +1,109 @@
+# Guardarraíles por agente (G1, G4, G5) — Fase 0: agentes de ejemplo del esqueleto.
+# La configuración inválida impide el arranque del agente; nunca se ignora.
+#
+# tools:     lista cerrada de herramientas (G1). Lo que no está aquí no existe.
+# outputs:   tipos de mensaje que puede publicar (G1/G2).
+# data_domains: dominios de memoria que puede leer (G4).
+
+agents:
+  research-hypothesis:
+    department: research
+    role: hypothesis
+    tools: [query_market_data, run_python_sandbox, search_memory, read_directives]
+    outputs: [strategy.proposal.v1, agent.heartbeat.v1]
+    data_domains: [market_history, lessons, evaluations, directives]
+    budget:
+      tokens_per_day: 2000000
+      compute_minutes_per_day: 120
+
+  research-curator:
+    department: research
+    role: curator
+    tools: [search_memory, read_evaluations, read_queue_state, publish_priority]
+    outputs: [agent.heartbeat.v1]
+    data_domains: [lessons, evaluations, queue_state, directives]
+
+  backtest-engineer:
+    department: backtest
+    role: engineer
+    tools: [run_backtest, read_dataset_metadata, read_spec, publish_report]
+    outputs: [backtest.report.v1, backtest.variant_log.v1, agent.heartbeat.v1]
+    data_domains: [market_history, specs]
+    budget:
+      compute_minutes_per_day: 480
+
+  backtest-analyst:
+    department: backtest
+    role: analyst
+    tools: [read_backtest_results, read_variant_log, publish_verdict]
+    outputs: [backtest.report.v1, agent.heartbeat.v1]
+    data_domains: [backtest_results, specs]
+
+  validation-quant:
+    department: validation
+    role: quant
+    tools: [run_monte_carlo, run_walk_forward, run_regime_stress, run_param_sensitivity, run_cost_robustness, read_spec, publish_verdict]
+    outputs: [validation.verdict.v1, validation.battery_log.v1, agent.heartbeat.v1]
+    data_domains: [market_history, specs, backtest_summaries, regimes]
+    budget:
+      compute_minutes_per_day: 480
+
+  validation-skeptic:
+    department: validation
+    role: skeptic
+    tools: [read_spec, read_battery_results, propose_adversarial_scenario, publish_skeptic_report]
+    outputs: [validation.skeptic_report.v1, agent.heartbeat.v1]
+    data_domains: [specs, battery_results]
+    budget:
+      compute_minutes_per_day: 120
+
+  risk-pretrade:
+    department: risk
+    role: pretrade
+    tools: [read_limits, read_portfolio_state, read_strategy_contract, emit_risk_token]
+    outputs: [risk.decision.v1, risk.rejection.v1, agent.heartbeat.v1]
+    data_domains: [risk_limits, portfolio, strategy_contracts]
+
+  risk-portfolio:
+    department: risk
+    role: portfolio
+    tools: [read_portfolio_state, read_market_data, read_limits, read_strategy_contracts, propose_defense_mode, publish_review]
+    outputs: [risk.portfolio_review.v1, risk.defense_mode.v1, risk.limit_breach.v1, agent.heartbeat.v1]
+    data_domains: [portfolio, market, risk_limits, strategy_contracts]
+
+  execution-router:
+    department: execution
+    role: router
+    tools: [broker_place, broker_cancel, broker_replace, broker_query, verify_risk_token, read_strategy_contract]
+    outputs: [order.status.v1, fill.v1, execution.exception.v1, agent.heartbeat.v1]
+    data_domains: [strategy_contracts, orders]
+    # G6: único agente con credenciales de broker, inyectadas como secreto.
+
+  ops-monitor:
+    department: execution
+    role: monitor
+    tools: [read_system_metrics, read_broker_positions, read_internal_positions, publish_incident, trigger_kill_switch]
+    outputs: [ops.incident.v1, ops.reconciliation.v1, agent.heartbeat.v1]
+    data_domains: [system_metrics, orders, positions]
+
+  macro-analyst:
+    department: macro
+    role: analyst
+    tools: [read_market_data, read_calendar, publish_regime]
+    outputs: [macro.regime.v1, macro.outlook.v1, agent.heartbeat.v1]
+    data_domains: [market, calendar]
+
+  news-analyst:
+    department: macro
+    role: news
+    tools: [fetch_news, read_calendar, search_memory, publish_alert]
+    outputs: [news.alert.v1, news.digest.v1, agent.heartbeat.v1]
+    data_domains: [news_sources, calendar]
+    # M-1: prohibido publicar order.request, directive, límites o veredictos.
+
+  chief-of-staff:
+    department: executive
+    role: chief_of_staff
+    tools: [read_all_reports, search_memory, read_directives, publish_task, submit_ceo_action, read_queue_state]
+    outputs: [executive.daily_report.v1, executive.task.v1, executive.ceo_request.v1, agent.heartbeat.v1]
+    data_domains: [reports, lessons, directives, queue_state]

@@ -53,3 +53,9 @@ Fase de diseño.
   [Dirección](docs/especificaciones/07-direccion.md).
 
 Hoja de ruta de implementación: [docs/arquitectura.md §10](docs/arquitectura.md#10-hoja-de-ruta-por-fases).
+
+## Implementación
+
+- **Fase 0 (cimientos)** — implementada y testeada (32 tests). Ver
+  [docs/fase0.md](docs/fase0.md): contratos de mensajes, bus con validación en el borde,
+  Permission Broker, Model Gateway, esqueleto de agentes y audit log con hash encadenado.

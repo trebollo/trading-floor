@@ -1,0 +1,54 @@
+# Model Gateway: los modelos son configuración, no código (§7.1).
+# kind: generative (escribe) | evaluator (decide — p. ej. Jev, sin generación de texto).
+
+models:
+  jev:
+    kind: evaluator
+    id: typesafe-ai/jev          # vía Vercel AI Gateway
+    input_cost_per_mtok: 0.042
+    context_window: 32000
+  frontier-strong:
+    kind: generative
+    tier: premium
+  frontier-lite:
+    kind: generative
+    tier: standard
+
+agents:
+  research-hypothesis:
+    generative: frontier-strong
+    decisions: jev
+  research-coder:
+    generative: frontier-strong
+  research-curator:
+    generative: frontier-lite
+    decisions: jev
+  backtest-engineer:
+    generative: frontier-lite
+  backtest-analyst:
+    generative: frontier-lite
+    decisions: jev
+  validation-quant:
+    generative: frontier-strong
+    decisions: jev
+  validation-skeptic:
+    generative: frontier-strong
+  risk-pretrade:
+    generative: frontier-lite    # solo redacta motivos; la decisión es determinista
+    decisions: jev
+  risk-portfolio:
+    generative: frontier-lite
+    decisions: jev
+  execution-router: {}           # determinista: sin LLM en el camino de la orden
+  ops-monitor:
+    generative: frontier-lite
+    decisions: jev
+  macro-analyst:
+    generative: frontier-lite
+    decisions: jev
+  news-analyst:
+    generative: frontier-lite
+    decisions: jev
+  chief-of-staff:
+    generative: frontier-strong
+    decisions: jev
