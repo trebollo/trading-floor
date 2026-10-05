@@ -73,6 +73,8 @@ def main() -> None:
             bus.close()
 
     print(json.dumps(report["phases"], indent=2, ensure_ascii=False, default=str))
+    if report.get("informe_diario"):
+        print(f"\nInforme diario (chief-of-staff): {json.dumps(report['informe_diario'], ensure_ascii=False, default=str)}")
     if report.get("presupuesto"):
         print(f"Presupuesto G3 hoy: {json.dumps(report['presupuesto'], ensure_ascii=False)}")
     print(f"\nPortfolio en papel: {report['phases'].get('paper_day') and len(report['phases']['paper_day']) or 0} estrategias")

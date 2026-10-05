@@ -30,6 +30,7 @@ from typing import Any
 from tf.audit import AuditLog
 from tf.bus import BaseBus
 from tf.datafeed import fetch_yahoo, ingest_yahoo
+from tf.departments import ChiefOfStaffAgent, MacroAnalystAgent
 from tf.directives import DirectivesBoard
 from tf.drift import DriftVerdict, StrategyPerformance, WeeklyCommittee, postmortem_lessons
 from tf.gateway import ModelGateway
@@ -156,6 +157,7 @@ class DailyCycle:
                 session = run_paper_session(
                     entry, data.close, data.open, data.ts.astype(float),
                     self.config.bars, initial_equity=self.config.initial_equity,
+                    permissions=self._permissions(), audit=self.audit,
                 )
                 session["metrics"] = entry.get("metrics") or {}
                 sessions.append(session)
@@ -221,12 +223,32 @@ class DailyCycle:
             else {"directive_id": None, "summary": "sin directrices cargadas"},
         )
 
-        # G3/G7: host multiagente compartido por todo el ciclo; el pipeline
-        # registra en él los workers de research/backtest/validation.
+        # G3/G7: host multiagente compartido por todo el ciclo. Departamento
+        # macro (régimen al inicio) y ejecutivo (tally + informe para el CEO).
         self._host = AgentHost(self.bus, self.audit)
         self._host_stats: dict[str, Any] = {}
+        permissions = self._permissions()
+        self._macro = MacroAnalystAgent(
+            name="macro-analyst", role="analyst", bus=self.bus, broker=permissions, audit=self.audit,
+        )
+        self._chief = ChiefOfStaffAgent(
+            tally={}, name="chief-of-staff", role="chief_of_staff", bus=self.bus, broker=permissions, audit=self.audit,
+        )
+        self._host.register("macro", workers={"macro-analyst": self._macro.receive},
+                            msg_types={"macro-analyst": list(MacroAnalystAgent.subscriptions)})
+        self._host.register("executive", workers={"chief-of-staff": self._chief.receive},
+                            msg_types={"chief-of-staff": list(ChiefOfStaffAgent.subscriptions)})
 
         report["phases"]["ingesta"] = self._ingest()
+
+        # Departamento macro: régimen del día antes de research (el comité de
+        # riesgo y el informe lo consumen por el bus).
+        csv_path = self.config.data_dir / f"{self.config.primary.lower()}.csv"
+        if csv_path.exists():
+            try:
+                self._macro.emit_regime(load_csv(csv_path).close)
+            except Exception as exc:
+                self._incident("macro", exc)
 
         try:
             research = self._research()
@@ -268,6 +290,19 @@ class DailyCycle:
 
         state["last_run"] = self.now
         self._save_state(state)
+
+        # Departamento ejecutivo: informe diario del ciclo para el CEO (K-5/G7).
+        try:
+            report_env = self._chief.daily_report(
+                cycle_date=datetime.fromtimestamp(self.now, tz=timezone.utc).strftime("%Y-%m-%d"),
+                budget=self.governor.usage() if self.governor else {},
+                summary=f"validaciones: {self._chief.tally.get('validation.verdict.v1', 0)}, "
+                        f"incidentes: {self._chief.tally.get('ops.incident.v1', 0)}, "
+                        f"regímenes: {self._chief.tally.get('macro.regime.v1', 0)}",
+            )
+            report["informe_diario"] = report_env.payload
+        except Exception as exc:
+            self._incident("informe", exc)
 
         if self.governor is not None:  # G3: consumo del presupuesto en el reporte
             report["presupuesto"] = self.governor.usage()

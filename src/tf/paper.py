@@ -1,11 +1,13 @@
 """Sesión de paper trading con guardarraíles completos (Fase 4).
 
 Extraída de `scripts/run_paper_day.py` para que el planificador diario la reutilice.
-Flujo por señal: target position de la estrategia → gate pre-trade determinista
-(K-1..K-4) → risk token → router (idempotencia E-5, frecuencia E-6) → broker de
-papel → ledger. Ejecución en la apertura de la barra siguiente (anti look-ahead).
-Nada aquí habla con un broker real: el contrato de `PaperBroker` es el que
-implementará el adaptador de broker real.
+Flujo por señal, **multiagente por el bus de eventos**: target position de la
+estrategia → `order.request.v1` → departamento de riesgo (gate determinista
+K-1..K-4, `risk.decision.v1`) → departamento de ejecución (router con idempotencia
+E-5, token E-2 y frecuencia E-6 → broker de papel → ledger → `fill.v1`/`order.status.v1`).
+Ejecución en la apertura de la barra siguiente (anti look-ahead). Nada aquí habla
+con un broker real: el contrato de `PaperBroker` es el que implementará el
+adaptador de broker real.
 """
 
 from __future__ import annotations
@@ -15,8 +17,12 @@ from typing import Any
 
 import numpy as np
 
+from tf.agents import Agent  # noqa: F401  (los departamentos son Agent)
+from tf.contracts import Actor, Envelope
+from tf.departments import ExecutionRouterAgent, RiskPreTradeAgent
 from tf.dsl import generate_target_position
 from tf.execution import ExecutionRouter, Ledger, PaperBroker, reconcile
+from tf.host import AgentHost
 from tf.risk import PortfolioState, PositionInfo, PreTradeGate, RiskLimits, StrategyContract
 
 SECRET = "paper-day-fase4"  # de desarrollo; el secreto real va en el entorno del despliegue
@@ -36,6 +42,8 @@ def run_paper_session(
     ts: np.ndarray,
     n_bars: int,
     initial_equity: float = 100_000.0,
+    permissions: Any | None = None,   # PermissionBroker; el scheduler pasa el suyo
+    audit: Any | None = None,         # AuditLog compartido con el ciclo
 ) -> dict[str, Any]:
     """Sesión de paper trading para una estrategia validada sobre la ventana final."""
     spec = entry["spec"]
@@ -48,7 +56,6 @@ def run_paper_session(
         max_total_drawdown=0.10,
         universe=["PAPER"],  # sesión de papel: un instrumento sintético por estrategia
     )
-    gate = PreTradeGate(limits, secret=SECRET)
     ledger = Ledger()
     broker = PaperBroker()
     router = ExecutionRouter(broker, secret=SECRET, ledger=ledger, max_orders_per_minute=60)
@@ -63,6 +70,40 @@ def run_paper_session(
 
     start = len(close) - n_bars
     state = PortfolioState(equity=initial_equity, equity_start_of_day=initial_equity, equity_peak=initial_equity)
+
+    # Departamentos de riesgo y ejecución sobre su propio host: TODA orden pasa
+    # por el bus (order.request → risk.decision → fill/order.status).
+    from tf.audit import SqliteAuditLog
+    from tf.bus import InMemoryBus
+    from tf.permissions import PermissionBroker
+
+    audit = audit or SqliteAuditLog()
+    if permissions is None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        permissions = PermissionBroker.from_yaml(root / "config" / "guardrails.yaml", audit=audit)
+    bus = InMemoryBus()
+    host = AgentHost(bus, audit=audit)
+    orders_ctx: dict[str, dict[str, Any]] = {}   # {request_id: {request, price, ts}}
+    decisions: dict[str, dict[str, Any]] = {}    # {request_id: decisión del gate}
+    fills: dict[str, dict[str, Any] | None] = {} # {request_id: fill o None}
+    regime = {"current": None}                   # lo actualiza el ciclo por barra (macro)
+    base = dict(bus=bus, broker=permissions, audit=audit)
+    risk_dept = RiskPreTradeAgent(
+        gate=PreTradeGate(limits, secret=SECRET), contracts={strategy_id: contract},
+        state=state, decisions=decisions, regime=regime, orders_ctx=orders_ctx,
+        name="risk-pretrade", role="pretrade", **base,
+    )
+    exec_dept = ExecutionRouterAgent(
+        router=router, orders_ctx=orders_ctx, fills=fills,
+        name="execution-router", role="router", **base,
+    )
+    host.register("risk", workers={"risk-pretrade": risk_dept.receive},
+                  msg_types={"risk-pretrade": list(RiskPreTradeAgent.subscriptions)})
+    host.register("execution", workers={"execution-router": exec_dept.receive},
+                  msg_types={"execution-router": list(ExecutionRouterAgent.subscriptions)})
+
     position: dict | None = None  # {frac, entry_price, equity_at_entry}
     events: list[tuple[str, str]] = []
     equity_curve: list[float] = []
@@ -93,39 +134,45 @@ def run_paper_session(
         request_id = f"{strategy_id}-{i}"
         request = {
             "request_id": request_id,
+            "strategy_id": strategy_id,
             "instrument": "PAPER",
             "side": side,
             "size": size,
+            "order_type": "MARKET",
             "stop_loss": price * 0.98 if wants_open else None,
         }
-        regime = "adverso" if adverse_regime(close, i) else "normal"
-        decision = gate.check(request, contract, state, regime=regime, now=float(ts[i + 1]))
+        # Régimen de la barra: lo que el departamento macro comunicaría al de riesgo.
+        regime["current"] = "adverso" if adverse_regime(close, i) else "normal"
+        bar_regime = regime["current"]
 
-        if not decision.authorized:
+        # La orden entra al bus; riesgo valida y ejecución llena en el drain.
+        orders_ctx[request_id] = {"request": request, "price": price, "ts": float(ts[i + 1])}
+        bus.publish(
+            Envelope(
+                type="order.request.v1", payload=request,
+                actor=Actor(agent="portfolio", role="strategy", department="execution"),
+            )
+        )
+        host.drain()
+
+        decision = decisions.get(request_id)
+        fill = fills.get(request_id)
+        if fill is None:  # rechazada por el gate o por el router: fail-closed
+            reason = decision["reason"] if decision else "sin decisión de riesgo (fail-closed)"
             n_rejected += 1
-            events.append((f"bar {i}", f"{side} rechazado por el gate: {decision.reason}"))
+            events.append((f"bar {i}", f"{side} rechazado: {reason}"))
             if wants_close:  # no pudimos cerrar por gate: forzado interno (fail-safe demo)
                 position = None
                 state.positions.pop("PAPER", None)
             continue
 
-        try:
-            order = {k: request[k] for k in ("request_id", "instrument", "side", "size")}
-            if request["stop_loss"] is not None:
-                order["stop_loss"] = request["stop_loss"]
-            router.execute(order, decision.risk_token, price=price, now=float(ts[i + 1]))
-            n_orders += 1
-        except Exception as exc:  # token expirado, suspensión del router, etc.
-            n_rejected += 1
-            events.append((f"bar {i}", f"{side} rechazado por el router: {exc}"))
-            continue
-
+        n_orders += 1
         if wants_open:
             events.append(
-                (f"bar {i}", f"APERTURA {decision.verdict} {size:.2%} a {price:.2f} "
-                 f"({'provisional: sin aperturas en régimen adverso' if provisional and regime == 'adverso' else regime})")
+                (f"bar {i}", f"APERTURA {decision['verdict']} {size:.2%} a {price:.2f} "
+                 f"({'provisional: sin aperturas en régimen adverso' if provisional and bar_regime == 'adverso' else bar_regime})")
             )
-            position = {"frac": decision.max_size or size, "entry_price": price, "equity_at_entry": state.equity}
+            position = {"frac": decision["max_size"] or size, "entry_price": price, "equity_at_entry": state.equity}
             # El gate solo ve el portfolio vía PortfolioState: registrar la posición abierta.
             state.positions["PAPER"] = PositionInfo(instrument="PAPER", side="BUY", size=position["frac"])
         else:

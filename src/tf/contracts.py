@@ -264,6 +264,17 @@ class NewsAlert(BaseModel):
     summary: str
 
 
+@message("executive.daily_report.v1")
+class DailyReport(BaseModel):
+    report_id: str
+    cycle_date: str
+    counts: dict[str, int] = Field(
+        description="Tally de mensajes del ciclo por tipo: veredictos, regímenes, incidentes..."
+    )
+    budget: dict[str, Any] = {}
+    summary: str
+
+
 __all__ = [
     "Actor",
     "Envelope",

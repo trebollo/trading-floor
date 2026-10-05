@@ -97,6 +97,22 @@ backtest-engineer ──backtest.report.v1──► validation-quant
                                           (batería, publica validation.verdict.v1)
 ```
 
+Y en el ciclo diario (`tf.scheduler`), el resto de departamentos sobre el mismo host:
+
+```
+macro-analyst ──macro.regime.v1──► chief-of-staff (tally del ciclo)
+[sesión paper, por orden]
+portfolio ──order.request.v1──► risk-pretrade ──risk.decision.v1──► execution-router
+  (gate determinista K-1..K-4, fail-closed)   (router E-2/E-5/E-6 → broker → fill.v1)
+chief-of-staff ──executive.daily_report.v1──► informe del ciclo para el CEO
+```
+
+Cada sesión de paper trading crea su propio bus con los departamentos de riesgo y
+ejecución: **toda orden pasa por el gate determinista vía bus**; sin decisión de
+riesgo no hay ejecución (fail-closed). El departamento de news queda pendiente de
+una fuente real (RSS/API); hoy el régimen lo calcula `macro-analyst` de forma
+determinista (precio vs SMA200).
+
 - **`tf.host.AgentHost`** — cada departamento se registra con sus workers (subagentes)
   y sus suscripciones al bus. Guardas anti-bucle obligatorias: dedup por `envelope.id`
   (re-encolar un mensaje se audita como `agent.loop_blocked` y se descarta), colas con
