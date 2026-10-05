@@ -59,12 +59,17 @@ Hoja de ruta de implementación: [docs/arquitectura.md §10](docs/arquitectura.m
 - **Fase 0 (cimientos)** — implementada y testeada. Ver [docs/fase0.md](docs/fase0.md):
   contratos de mensajes, bus con validación en el borde, Permission Broker, Model
   Gateway, esqueleto de agentes y audit log con hash encadenado.
-- **Fase 1 (pipeline de investigación)** — implementada y testeada (55 tests). Ver
+- **Fase 1 (pipeline de investigación)** — implementada y testeada. Ver
   [docs/fase1.md](docs/fase1.md): DSL restringido, motor de backtest anti-look-ahead,
   batería canónica completa (Monte Carlo, walk-forward, régimen, sensibilidad, costes,
   correlación) y catálogo de estrategias evaluadas end-to-end.
+- **Fase 2 (riesgo y ejecución en papel)** — implementada y testeada (81 tests). Ver
+  [docs/fase2.md](docs/fase2.md): gate pre-trade determinista fail-closed, tokens de
+  riesgo HMAC con TTL, contratos de estrategia, modo solo-cierre por drawdown, execution
+  router con idempotencia y auto-suspensión, ledger con replay y reconciliación.
 
 ```bash
-uv sync && uv run pytest -q        # 55 tests
-uv run python scripts/run_pipeline.py   # demo end-to-end
+uv sync && uv run pytest -q                  # 81 tests
+uv run python scripts/run_pipeline.py        # demo Fase 1: investigación
+uv run python scripts/run_trading_day.py     # demo Fase 2: día de trading en papel
 ```
