@@ -21,6 +21,9 @@ export default async function OficinaPage() {
     kpis: { ...demo.kpis, estrategiasVivas: overview.kpis.estrategiasVivas },
     equity: overview.equity.length > 0 ? overview.equity : demo.equity,
     alertas: overview.alertas.length > 0 ? overview.alertas : demo.alertas,
+    // La telemetría de agentes/eventos llega en la fase 4; mientras tanto la
+    // secuencia de demo alimenta la simulación en vivo del canvas.
+    eventos: demo.eventos,
     departamentos: montarOficina({ ...demo.kpis, estrategiasVivas: overview.kpis.estrategiasVivas }, estrategias),
   };
 

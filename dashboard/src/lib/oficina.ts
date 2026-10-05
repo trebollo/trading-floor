@@ -36,6 +36,18 @@ export interface DeptoOficina {
   agentes: AgenteOficina[];
   /** Estrategias en las que trabaja el departamento (se resuelve con el catálogo). */
   estrategias: Strategy[];
+  /** P&L del día atribuible al departamento (reparto determinista del global). */
+  pnlDia: number;
+}
+
+/** Acontecimiento proyectado en el ticker de la oficina. */
+export interface EventoOficina {
+  id: string;
+  ts: string;
+  /** Departamento originador (null = sistema). */
+  departamento: string | null;
+  texto: string;
+  nivel: "info" | "aviso" | "critico";
 }
 
 export interface OficinaData {
@@ -43,6 +55,7 @@ export interface OficinaData {
   kpis: Kpis;
   equity: EquityPoint[];
   alertas: { nivel: "info" | "aviso" | "critico"; texto: string; ts: string }[];
+  eventos: EventoOficina[];
   departamentos: DeptoOficina[];
 }
 
@@ -137,6 +150,44 @@ function estrategiasDeDepto(deptoId: string, catalogo: Strategy[]): Strategy[] {
   return catalogo.filter((s) => s.ownerAgent === owner);
 }
 
+/** Reparto del P&L del día entre salas (genera costes y beneficios atribuibles). */
+const REPARTO_PNL: Record<string, number> = {
+  execution: 0.85,
+  macro: 0.35,
+  risk: 0.06,
+  research: -0.08,
+  backtest: -0.04,
+  validation: -0.04,
+  direccion: -0.1,
+};
+
+/** Tareas secundarias que los agentes alternan en la simulación en vivo (demo). */
+const TAREAS_EXTRA: Record<string, string[]> = {
+  direccion: ["Preparando el resumen de las 20:00 para el CEO", "Revisando el presupuesto LLM del mes"],
+  research: ["Filtrando la cola de hipótesis por expectancy", "Leyendo la memoria colectiva de fallos"],
+  backtest: ["Encolando sprint de validación cruzada", "Ajustando costes de slippage del modelo"],
+  validation: ["Walk-forward sobre ventanas de volatilidad", "Presionando la spec por sesgo de supervivencia"],
+  risk: ["Recalibrando el límite de exposición bruta", "Auditando los vetos de la semana"],
+  macro: ["Refrescando el calendario económico", "Reevaluando el régimen tras el CPI"],
+  execution: ["Reconciliando fills del bloque de las 11:00", "Replaying el ledger contra el broker demo"],
+};
+
+/** Acontecimientos de sala que la simulación emite de vez en cuando (demo). */
+const EVENTOS_SALA: Record<string, string[]> = {
+  direccion: ["Informe diario entregado al CEO", "Directriz de presupuesto verificada por el gabinete"],
+  research: ["Nueva hipótesis en cola: breakout-USDJPY-h4", "Hipótesis descartada por expectancy negativo"],
+  backtest: ["Backtest completado: sharpe 1.31 · dd -7.2 %", "Backtest abortado: datos de sesión incompletos"],
+  validation: ["Monte Carlo: p95 de dd dentro de umbrales", "El adversario ha encontrado sensibilidad a costes"],
+  risk: ["Veto pre-trade: exposición bruta al límite", "Gate pre-trade: 12 órdenes autorizadas"],
+  macro: ["Régimen reevaluado: risk-on moderado", "Calendario: impacto alto en 45 min (NFP)"],
+  execution: ["3 órdenes enviadas · slippage 0.4 pb", "Ledger conciliado · replay verificado"],
+};
+
+function nivelDeEvento(texto: string): EventoOficina["nivel"] {
+  if (/veto|abortad|impacto alto/i.test(texto)) return "aviso";
+  return "info";
+}
+
 export function montarOficina(kpis: Kpis, catalogo: Strategy[]): DeptoOficina[] {
   return SALAS.map((sala) => {
     const plantilla = PLANTILLA[sala.id];
@@ -156,8 +207,29 @@ export function montarOficina(kpis: Kpis, catalogo: Strategy[]): DeptoOficina[] 
       color: plantilla.color,
       agentes,
       estrategias: estrategiasDeDepto(sala.id, catalogo),
+      pnlDia: Math.round(kpis.pnlDia * (REPARTO_PNL[sala.id] ?? 0) * 100) / 100,
     };
   });
+}
+
+/** Eventos iniciales de la sesión de demo (con timestamps recientes). */
+function demoEventos(): EventoOficina[] {
+  const ev = (minAtras: number, departamento: string | null, texto: string, nivel: EventoOficina["nivel"] = "info"): EventoOficina => ({
+    id: `ev-inicial-${minAtras}-${departamento ?? "sys"}`,
+    ts: new Date(Date.now() - minAtras * 60_000).toISOString(),
+    departamento,
+    texto,
+    nivel,
+  });
+  return [
+    ev(96, "direccion", "Apertura de sesión: modo PAPER, 4 estrategias vivas"),
+    ev(74, "research", "Nueva hipótesis en cola: FX reversión a la media"),
+    ev(63, "backtest", "Backtest en curso: stat-arb-pares-BBVA-SAN"),
+    ev(41, "risk", "Veto pre-trade: exposición bruta", "aviso"),
+    ev(33, "execution", "Órdenes de mean-reversion-EURUSD-m5 enviadas"),
+    ev(18, "macro", "Calendario económico sin refrescar (2 h)", "aviso"),
+    ev(6, "execution", "Ledger conciliado · replay verificado"),
+  ];
 }
 
 export function demoOficina(): OficinaData {
@@ -166,6 +238,77 @@ export function demoOficina(): OficinaData {
     kpis: demoKpis,
     equity: demoEquity,
     alertas: demoAlertas,
+    eventos: demoEventos(),
     departamentos: montarOficina(demoKpis, demoStrategies),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Simulación en vivo (solo demo): avanza la oficina un tick para que la
+// escena respire mientras se depura la interfaz. Con memoria colectiva
+// conectada, la telemetría real (fase 4) sustituirá a esta función.
+// ---------------------------------------------------------------------------
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
+const clampPct = (v: number) => Math.min(95, Math.max(4, v));
+
+/** Avanza un tick la simulación: equity, KPIs, tareas de agentes y eventos. */
+export function avanzarOficina(datos: OficinaData): OficinaData {
+  const ahora = new Date().toISOString();
+  const eventos: EventoOficina[] = [...datos.eventos];
+  const emitir = (departamento: string | null, texto: string, nivel: EventoOficina["nivel"] = nivelDeEvento(texto)) =>
+    eventos.push({ id: crypto.randomUUID(), ts: ahora, departamento, texto, nivel });
+
+  // La equity deriva con un pequeño sesgo positivo; acotamos la serie.
+  const eq = datos.equity;
+  const ultimo = eq[eq.length - 1];
+  const equity = Math.max(50_000, ultimo.equity + (Math.random() - 0.46) * 60);
+  const pico = Math.max(ultimo.equity / (1 + ultimo.drawdownPct / 100), equity);
+  const equityNueva = [
+    ...eq.slice(-239),
+    { ts: ahora, equity: round2(equity), drawdownPct: round2(((equity - pico) / pico) * 100) },
+  ];
+  const delta = equity - ultimo.equity;
+
+  const kpis: Kpis = {
+    ...datos.kpis,
+    pnlDia: round2(datos.kpis.pnlDia + delta),
+    pnlAcumulado: round2(datos.kpis.pnlAcumulado + delta),
+    exposicionPct: round2(clampPct(datos.kpis.exposicionPct + (Math.random() - 0.5) * 2.4)),
+    presupuestoUsadoPct: round2(Math.min(99, datos.kpis.presupuestoUsadoPct + Math.random() * 0.06)),
+  };
+
+  // Copia mutable de los agentes.
+  const departamentos = datos.departamentos.map((d) => ({
+    ...d,
+    pnlDia: round2(kpis.pnlDia * (REPARTO_PNL[d.id] ?? 0)),
+    agentes: d.agentes.map((a) => ({ ...a })),
+  }));
+  const agentes = departamentos.flatMap((d) => d.agentes.map((a) => ({ a, d })));
+
+  // Un agente alterna tarea de vez en cuando.
+  if (Math.random() < 0.4) {
+    const candidatos = agentes.filter(({ a }) => a.estado !== "alerta");
+    const elegido = candidatos[Math.floor(Math.random() * candidatos.length)];
+    if (elegido) {
+      const pool = TAREAS_EXTRA[elegido.d.id];
+      const tarea = pool[Math.floor(Math.random() * pool.length)];
+      if (tarea && tarea !== elegido.a.tarea) {
+        elegido.a.tarea = tarea;
+        elegido.a.estado = "trabajando";
+        emitir(elegido.d.id, `${elegido.a.rol}: ${tarea.charAt(0).toLowerCase()}${tarea.slice(1)}`);
+      }
+    }
+  }
+
+  // Acontecimiento genérico de sala.
+  if (Math.random() < 0.45) {
+    const ids = Object.keys(EVENTOS_SALA);
+    const id = ids[Math.floor(Math.random() * ids.length)];
+    const pool = EVENTOS_SALA[id];
+    const texto = pool[Math.floor(Math.random() * pool.length)];
+    emitir(id, texto);
+  }
+
+  return { ...datos, kpis, equity: equityNueva, departamentos, eventos: eventos.slice(-40) };
 }

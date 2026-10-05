@@ -16,7 +16,7 @@ UI web de gobierno y observabilidad del sistema multiagente. Implementa el
 
 | Ruta | Contenido |
 |---|---|
-| `/` | **La Oficina**: planta isométrica interactiva (Canvas 2D) con los 7 departamentos como salas, los agentes como personas en su mesa y la *wall* norte proyectando KPIs y equity. Clic en una sala abre su panel (plantilla, tareas, estrategias con acciones); clic en un agente abre su ficha; arrastrar/rueda para navegar |
+| `/` | **La Oficina**: planta isométrica interactiva (Canvas 2D) con los 7 departamentos como salas, los agentes como personas en su mesa y la *wall* norte proyectando KPIs y equity. Clic en una sala abre su panel (plantilla, tareas, estrategias con acciones); clic en un agente abre su ficha; clic en la Wall abre la memoria operativa completa (curva de equity, P&L por departamento, alertas). Arrastrar/rueda para navegar y accesos rápidos a cada sala. En modo demo, una simulación en vivo hace respirar la escena: equity y KPIs avanzan, los agentes alternan tareas y un ticker emite los acontecimientos de cada departamento |
 | `/resumen` | KPIs (P&L, exposición, presupuesto LLM), curva de equity, alertas, estado de departamentos, conmutador de modo del sistema |
 | `/estrategias` | Catálogo con ciclo de vida y acciones (pausar/retirar/bloquear) con doble confirmación |
 | `/pipeline` | Embudo de investigación por etapa y evaluaciones recientes |

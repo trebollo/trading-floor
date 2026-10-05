@@ -17,6 +17,8 @@ import {
 interface SeleccionCallbacks {
   onDepto: (id: string | null) => void;
   onAgente: (agente: AgenteOficina | null) => void;
+  /** Abre (true) o cierra (false) el panel de la Wall. */
+  onWall: (sel: boolean) => void;
 }
 
 const ATRIO = { x: -3.5, y: -3.5, w: 7, h: 7.5 }; // zona central despejada
@@ -39,6 +41,7 @@ export class OficinaRenderer {
   private agenteSel: AgenteOficina | null = null;
   private hoverDepto: string | null = null;
   private hoverAgente: AgenteOficina | null = null;
+  private hoverWall = false;
 
   private arrastrando = false;
   private punteroPrev = { x: 0, y: 0 };
@@ -100,8 +103,18 @@ export class OficinaRenderer {
     this.foco = { wx: 0, wy: -1, zoom: 0.8 };
   }
 
+  /** Enfoca la Wall sin cambiar el zoom. */
+  enfocarWall() {
+    this.foco = { wx: 0, wy: -6.4 };
+  }
+
   destruir() {
     cancelAnimationFrame(this.raf);
+  }
+
+  /** Sustituye los datos (tick de simulación / regeneración) sin perder cámara ni selección. */
+  actualizarDatos(datos: OficinaData) {
+    this.datos = datos;
   }
 
   // -------------------------------------------------------------------------
@@ -164,8 +177,9 @@ export class OficinaRenderer {
     // Hover
     const hitA = this.agenteEn(p.x, p.y);
     this.hoverAgente = hitA;
-    this.hoverDepto = hitA ? null : this.deptoEn(p.x, p.y);
-    this.canvas.style.cursor = hitA || this.hoverDepto ? "pointer" : "grab";
+    this.hoverWall = !hitA && this.enWall(p.x, p.y);
+    this.hoverDepto = hitA || this.hoverWall ? null : this.deptoEn(p.x, p.y);
+    this.canvas.style.cursor = hitA || this.hoverDepto || this.hoverWall ? "pointer" : "grab";
   };
 
   private onUp = (e: PointerEvent) => {
@@ -175,18 +189,26 @@ export class OficinaRenderer {
     this.arrastrando = false;
     if (this.movio || e.pointerType === "touch") return;
 
-    // Clic: agente primero, luego sala
+    // Clic: agente primero, luego wall, luego sala
     const p = this.pos(e);
     const agente = this.agenteEn(p.x, p.y);
     if (agente) {
       this.seleccionarAgente(agente);
       this.cb.onAgente(agente);
       this.cb.onDepto(null);
+      this.cb.onWall(false);
+      return;
+    }
+    if (this.enWall(p.x, p.y)) {
+      this.cb.onAgente(null);
+      this.cb.onDepto(null);
+      this.cb.onWall(true);
       return;
     }
     const depto = this.deptoEn(p.x, p.y);
     this.seleccionarDepto(depto);
     this.cb.onAgente(null);
+    this.cb.onWall(false);
     if (depto) {
       this.enfocarDepto(depto);
       this.cb.onDepto(depto);
@@ -228,6 +250,18 @@ export class OficinaRenderer {
       if (wx >= d.x && wx <= d.x + d.w && wy >= d.y && wy <= d.y + d.h) return d.id;
     }
     return null;
+  }
+
+  /** Rectángulo en pantalla que ocupa la Wall. */
+  private rectWall(): { x: number; y: number; w: number; h: number } {
+    const z = this.cam.zoom;
+    const ancla = mundoAPantalla(WALL.x, WALL.y, this.cam);
+    return { x: ancla.sx - (WALL.anchoPx * z) / 2, y: ancla.sy - WALL.altoPx * z, w: WALL.anchoPx * z, h: WALL.altoPx * z };
+  }
+
+  private enWall(sx: number, sy: number): boolean {
+    const r = this.rectWall();
+    return sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h;
   }
 
   // -------------------------------------------------------------------------
@@ -552,12 +586,12 @@ export class OficinaRenderer {
     const x = ancla.sx - w / 2;
     const y = ancla.sy - h;
 
-    // Marco
+    // Marco (se ilumina al pasar el cursor)
     ctx.fillStyle = "#0b1120";
     ctx.beginPath();
     ctx.roundRect(x - 10 * z, y - 10 * z, w + 20 * z, h + 20 * z, 10 * z);
     ctx.fill();
-    ctx.strokeStyle = "rgba(148,163,184,0.3)";
+    ctx.strokeStyle = this.hoverWall ? "rgba(52,211,153,0.65)" : "rgba(148,163,184,0.3)";
     ctx.stroke();
 
     // Pantalla
