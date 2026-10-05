@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from tf.gateway import GatewayConfig, JevClient, ModelGateway, OpenAICompatClient
+from tf.gateway import GatewayConfig, JevClient, ModelGateway, OpenAICompatClient, OpenAIResponsesClient
 from tf.pipeline import ResearchTemplateAgent
 
 # ---------------------------------------------------------------------------
@@ -47,10 +47,10 @@ class FakeTransport:
 
     def __init__(self, response: dict):
         self.response = response
-        self.calls: list[tuple[str, dict]] = []
+        self.calls: list[tuple[str, dict, dict]] = []
 
-    def __call__(self, url: str, api_key: str, payload: dict, timeout: float) -> dict:
-        self.calls.append((url, payload))
+    def __call__(self, url: str, api_key: str, payload: dict, timeout: float, headers: dict | None = None) -> dict:
+        self.calls.append((url, payload, headers or {}))
         return self.response
 
 
@@ -67,6 +67,29 @@ def test_client_for_builds_clients_when_keys_present(monkeypatch):
     assert isinstance(jev, JevClient) and jev.model_id == "typesafe-ai/jev"
     assert isinstance(gen, OpenAICompatClient) and gen.model_id == "gpt-6-luna"
     assert gen.base_url == "https://opencode.ai/zen/go/v1"
+
+
+def test_client_for_protocol_dispatch():
+    from tf.gateway import OpenAIResponsesClient
+
+    config = GatewayConfig.model_validate(
+        {
+            "models": {
+                "gpt": {
+                    "kind": "generative",
+                    "id": "gpt-6-luna",
+                    "provider": "opencode-go",
+                    "protocol": "responses",
+                    "endpoint": "https://opencode.ai/zen/go/v1",
+                    "api_key_env": "OPENCODE_API_KEY",
+                },
+            },
+            "agents": {"agent-x": {"generative": "gpt"}},
+        }
+    )
+    gw = ModelGateway(config)
+    client = gw.client_for("agent-x", "generative", env={"OPENCODE_API_KEY": "k"})
+    assert isinstance(client, OpenAIResponsesClient)
 
 
 def test_client_for_returns_none_without_key_or_provider():
@@ -87,10 +110,35 @@ def test_jev_client_request_and_answers(monkeypatch):
     monkeypatch.setattr("tf.gateway._post_json", fake)
     jev = JevClient(model_id="typesafe-ai/jev", api_key="k")
     answers = jev.evaluate("mercado en caída", {"escalate": {"type": "noul", "instructions": "¿escalar?"}})
-    url, payload = fake.calls[0]
+    url, payload, headers = fake.calls[0]
     assert url == "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
     assert payload["model"] == "typesafe-ai/jev"
     assert answers["escalate"]["noul"] == 0.93
+
+
+def test_opencode_clients_send_session_header(monkeypatch):
+    fake = FakeTransport({"answers": {}, "choices": [{"message": {"content": ""}}]})
+    monkeypatch.setattr("tf.gateway._post_json", fake)
+    jev = JevClient(model_id="jev-1.13", api_key="k", base_url="https://opencode.ai/zen/v1")
+    jev.evaluate("estado", {"q": {"type": "noul", "instructions": "¿?"}})
+    gen = OpenAICompatClient(model_id="glm-5.3-flash", api_key="k", base_url="https://opencode.ai/zen/go/v1")
+    gen.complete("s", "u")
+    for url, _payload, headers in fake.calls:
+        assert headers["x-opencode-session"]
+
+
+def test_responses_client_request_and_content(monkeypatch):
+    fake = FakeTransport(
+        {"output": [{"type": "message", "content": [{"type": "output_text", "text": "[{\"hypothesis\": \"h\"}]"}]}]}
+    )
+    monkeypatch.setattr("tf.gateway._post_json", fake)
+    gen = OpenAIResponsesClient(model_id="gpt-6-luna", api_key="k", base_url="https://opencode.ai/zen/go/v1")
+    out = gen.complete(system="s", user="u")
+    url, payload, headers = fake.calls[0]
+    assert url == "https://opencode.ai/zen/go/v1/responses"
+    assert payload["model"] == "gpt-6-luna"
+    assert headers["x-opencode-session"]
+    assert json.loads(out) == [{"hypothesis": "h"}]
 
 
 def test_generative_client_request_and_content(monkeypatch):
@@ -98,7 +146,7 @@ def test_generative_client_request_and_content(monkeypatch):
     monkeypatch.setattr("tf.gateway._post_json", fake)
     gen = OpenAICompatClient(model_id="gpt-6-luna", api_key="k", base_url="https://opencode.ai/zen/go/v1")
     out = gen.complete(system="s", user="u")
-    url, payload = fake.calls[0]
+    url, payload, headers = fake.calls[0]
     assert url == "https://opencode.ai/zen/go/v1/chat/completions"
     assert payload["model"] == "gpt-6-luna"
     assert json.loads(out) == [{"hypothesis": "h"}]

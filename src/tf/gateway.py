@@ -10,6 +10,7 @@ queda fijado es el contrato de tipado, routing y failover.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -28,6 +29,7 @@ class ModelConfig(BaseModel):
     provider: Literal["vercel-ai-gateway", "opencode-go"] | None = None
     endpoint: str | None = None  # base URL de la API
     api_key_env: str | None = None  # variable de entorno con la credencial
+    protocol: Literal["chat-completions", "responses", "systemone"] | None = None  # OpenCode Go: responses para GPT/Grok/Muse, chat-completions para GLM/Kimi/DeepSeek, systemone para Jev
 
     @model_validator(mode="after")
     def _external_id_for_evaluator(self) -> "ModelConfig":
@@ -125,6 +127,8 @@ class ModelGateway:
             return None
         if model.kind == "evaluator":
             return JevClient(model_id=model.id or model.name, api_key=api_key, base_url=model.endpoint or VERCEL_TYPESAFE_URL)
+        if model.protocol == "responses":
+            return OpenAIResponsesClient(model_id=model.id or model.name, api_key=api_key, base_url=model.endpoint or "")
         return OpenAICompatClient(model_id=model.id or model.name, api_key=api_key, base_url=model.endpoint or "")
 
 
@@ -135,17 +139,15 @@ class ModelGateway:
 VERCEL_TYPESAFE_URL = "https://ai-gateway.vercel.sh/typesafe/v1"
 
 
-def _post_json(url: str, api_key: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+def _post_json(
+    url: str, api_key: str, payload: dict[str, Any], timeout: float, headers: dict[str, str] | None = None
+) -> dict[str, Any]:
     import json as _json
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(
-        url,
-        data=_json.dumps(payload).encode(),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
+    base_headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"} | (headers or {})
+    req = urllib.request.Request(url, data=_json.dumps(payload).encode(), headers=base_headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return _json.loads(resp.read().decode())
@@ -153,6 +155,11 @@ def _post_json(url: str, api_key: str, payload: dict[str, Any], timeout: float) 
         # El motivo real (plan sin acceso, modelo deshabilitado, auth...) va en el cuerpo.
         body = e.read().decode(errors="replace")[:500]
         raise RuntimeError(f"HTTP {e.code} de {url}: {body}") from e
+
+
+def _opencode_session_headers(session_id: str) -> dict[str, str]:
+    """Cabeceras que OpenCode Go exige para enrutar y cachear prompts."""
+    return {"x-opencode-session": session_id, "User-Agent": "trading-floor/0.1"}
 
 
 class JevClient:
@@ -169,22 +176,30 @@ class JevClient:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.session_id = uuid.uuid4().hex  # estable durante la vida del cliente
 
     def evaluate(self, state: str | dict[str, Any] | list[str], questions: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
         """Devuelve {pregunta: respuesta} tal cual el proveedor (answers map)."""
         payload = {"model": self.model_id, "state": state, "questions": questions}
-        resp = _post_json(f"{self.base_url}/systemone", self.api_key, payload, self.timeout)
+        resp = _post_json(
+            f"{self.base_url}/systemone",
+            self.api_key,
+            payload,
+            self.timeout,
+            headers=_opencode_session_headers(self.session_id),
+        )
         return resp.get("answers", {})
 
 
 class OpenAICompatClient:
-    """Modelo generativo vía API OpenAI-compatible (OpenCode Go: /zen/go/v1)."""
+    """Modelo generativo vía API OpenAI-compatible chat/completions (GLM, Kimi, DeepSeek...)."""
 
     def __init__(self, model_id: str, api_key: str, base_url: str, timeout: float = 60.0) -> None:
         self.model_id = model_id
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.session_id = uuid.uuid4().hex  # estable durante la vida del cliente
 
     def complete(self, system: str, user: str, temperature: float = 0.7) -> str:
         payload = {
@@ -192,5 +207,47 @@ class OpenAICompatClient:
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": temperature,
         }
-        resp = _post_json(f"{self.base_url}/chat/completions", self.api_key, payload, self.timeout)
+        resp = _post_json(
+            f"{self.base_url}/chat/completions",
+            self.api_key,
+            payload,
+            self.timeout,
+            headers=_opencode_session_headers(self.session_id),
+        )
         return resp["choices"][0]["message"]["content"]
+
+
+class OpenAIResponsesClient:
+    """Modelo generativo vía la API Responses de OpenAI (GPT/Grok/Muse en OpenCode Go)."""
+
+    def __init__(self, model_id: str, api_key: str, base_url: str, timeout: float = 60.0) -> None:
+        self.model_id = model_id
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.session_id = uuid.uuid4().hex  # estable durante la vida del cliente
+
+    def complete(self, system: str, user: str, temperature: float = 0.7) -> str:
+        payload = {
+            "model": self.model_id,
+            "instructions": system,
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": user}]}],
+            "temperature": temperature,
+        }
+        resp = _post_json(
+            f"{self.base_url}/responses",
+            self.api_key,
+            payload,
+            self.timeout,
+            headers=_opencode_session_headers(self.session_id),
+        )
+        # output es una lista de items; el texto útil viene en los de tipo message.
+        parts = [
+            piece["text"]
+            for item in resp.get("output", [])
+            for piece in item.get("content", [])
+            if item.get("type") == "message" and piece.get("type") == "output_text"
+        ]
+        if not parts:
+            raise RuntimeError(f"respuesta de {self.model_id} sin texto de salida: {str(resp)[:300]}")
+        return "".join(parts)

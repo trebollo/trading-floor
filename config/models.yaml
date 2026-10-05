@@ -16,15 +16,17 @@ models:
     context_window: 32000
   frontier-strong:               # para hipótesis y análisis que exigen calidad
     kind: generative
-    id: gpt-6-luna               # OpenCode Go
+    id: gpt-6-luna               # OpenCode Go — protocolo Responses
     provider: opencode-go
+    protocol: responses
     endpoint: https://opencode.ai/zen/go/v1
     api_key_env: OPENCODE_API_KEY
     tier: standard
   frontier-lite:                 # para redacción y tareas voluminosas de bajo coste
     kind: generative
-    id: glm-5.3-flash            # OpenCode Go
+    id: glm-5.3-flash            # OpenCode Go — protocolo chat/completions
     provider: opencode-go
+    protocol: chat-completions
     endpoint: https://opencode.ai/zen/go/v1
     api_key_env: OPENCODE_API_KEY
     tier: economic
