@@ -133,11 +133,18 @@ export function DepartamentoPanel({ depto, onCerrar }: { depto: DeptoOficina; on
                           />
                         </>
                       )}
-                      {(s.status === "BLOQUEADA" || s.status === "RETIRADA") && (
+                      {s.status === "BLOQUEADA" && (
                         <DoubleConfirm
-                          etiqueta={s.status === "BLOQUEADA" ? "Desbloquear" : "Reactivar"}
-                          etiquetaConfirm="¿Confirmar?"
-                          onConfirm={() => cambiarEstadoEstrategia(s.id, "reactivar")}
+                          etiqueta="Desbloquear"
+                          etiquetaConfirm="¿Devolver a papel?"
+                          onConfirm={() => cambiarEstadoEstrategia(s.id, "desbloquear")}
+                        />
+                      )}
+                      {s.status === "RETIRADA" && (
+                        <DoubleConfirm
+                          etiqueta="Reproponer"
+                          etiquetaConfirm="¿Reiniciar el ciclo?"
+                          onConfirm={() => cambiarEstadoEstrategia(s.id, "reproponer")}
                         />
                       )}
                       {(s.status === "PROPUESTA" || s.status === "EN_BACKTEST" || s.status === "VALIDADA" || s.status === "APROBADA") && (

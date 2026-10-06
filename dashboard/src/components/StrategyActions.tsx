@@ -5,7 +5,7 @@ import { DoubleConfirm } from "@/components/DoubleConfirm";
 import type { StrategyStatus } from "@/lib/types";
 
 /** Acciones de ciclo de vida permitidas desde el dashboard, por estado actual. */
-const ACCIONES: Record<StrategyStatus, { accion: "pausar" | "reactivar" | "retirar" | "bloquear"; etiqueta: string; peligroso: boolean }[]> = {
+const ACCIONES: Record<StrategyStatus, { accion: "pausar" | "reactivar" | "desbloquear" | "reproponer" | "retirar" | "bloquear"; etiqueta: string; peligroso: boolean }[]> = {
   PROPUESTA: [],
   EN_BACKTEST: [{ accion: "bloquear", etiqueta: "Bloquear", peligroso: true }],
   VALIDADA: [{ accion: "bloquear", etiqueta: "Bloquear", peligroso: true }],
@@ -18,8 +18,8 @@ const ACCIONES: Record<StrategyStatus, { accion: "pausar" | "reactivar" | "retir
     { accion: "pausar", etiqueta: "Pausar", peligroso: false },
     { accion: "retirar", etiqueta: "Retirar", peligroso: true },
   ],
-  RETIRADA: [{ accion: "reactivar", etiqueta: "Reactivar", peligroso: false }],
-  BLOQUEADA: [{ accion: "reactivar", etiqueta: "Desbloquear", peligroso: false }],
+  RETIRADA: [{ accion: "reproponer", etiqueta: "Reproponer", peligroso: false }],
+  BLOQUEADA: [{ accion: "desbloquear", etiqueta: "Desbloquear", peligroso: false }],
 };
 
 export function StrategyActions({ id, status }: { id: string; status: StrategyStatus }) {

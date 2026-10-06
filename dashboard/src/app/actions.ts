@@ -50,31 +50,54 @@ export async function revocarDirectiva(id: string): Promise<AccionResultado> {
   }
 }
 
-const TRANSICIONES: Record<string, string> = {
-  pausar: "PAPEL", // pausa operativa: deja de operar, permanece en papel
-  reactivar: "VIVA",
-  retirar: "RETIRADA",
-  bloquear: "BLOQUEADA",
+/** Acción → estado destino, con los estados de origen permitidos (ciclo de vida de migrations/0001). */
+const TRANSICIONES: Record<string, { destino: string; desde: string[] }> = {
+  // Pausar solo una estrategia que opera; reactivar solo desde PAPEL (nunca
+  // saltar de BLOQUEADA/EN_BACKTEST a VIVA: el ciclo exige validación y papel).
+  pausar: { destino: "PAPEL", desde: ["VIVA"] },
+  reactivar: { destino: "VIVA", desde: ["PAPEL"] },
+  // Desbloquear nunca reactiva en vivo: vuelve a papel hasta pasar el ciclo.
+  desbloquear: { destino: "PAPEL", desde: ["BLOQUEADA"] },
+  // Una retirada vuelve al inicio del pipeline (no salta a viva).
+  reproponer: { destino: "PROPUESTA", desde: ["RETIRADA"] },
+  retirar: {
+    destino: "RETIRADA",
+    desde: ["PROPUESTA", "EN_BACKTEST", "VALIDADA", "APROBADA", "PAPEL", "VIVA"],
+  },
+  bloquear: {
+    destino: "BLOQUEADA",
+    desde: ["PROPUESTA", "EN_BACKTEST", "VALIDADA", "APROBADA", "PAPEL", "VIVA"],
+  },
 };
 
 export async function cambiarEstadoEstrategia(id: string, accion: keyof typeof TRANSICIONES): Promise<AccionResultado> {
-  const nuevo = TRANSICIONES[accion];
-  if (!nuevo) return { ok: false, mensaje: "Acción desconocida." };
+  const transicion = TRANSICIONES[accion];
+  if (!transicion) return { ok: false, mensaje: "Acción desconocida." };
 
   if (!sql) {
-    return { ok: true, mensaje: `Estrategia → ${nuevo} (demo: sin base de datos no se persiste).` };
+    return { ok: true, mensaje: `Estrategia → ${transicion.destino} (demo: sin base de datos no se persiste).` };
   }
   try {
+    // Compare-and-swap sobre el estado actual: nunca sobrescribe una decisión
+    // más reciente ni salta etapas del ciclo de vida.
+    const actuales = await sql`
+      SELECT status::text AS status FROM strategies WHERE id = ${id}
+    `;
+    const actual = actuales[0]?.status;
+    if (!actual) return { ok: false, mensaje: "Estrategia no encontrada." };
+    if (!transicion.desde.includes(actual)) {
+      return { ok: false, mensaje: `Transición no permitida desde ${actual}.` };
+    }
     const rows = await sql`
-      UPDATE strategies SET status = ${nuevo}::strategy_status, updated_at = now()
-      WHERE id = ${id}
+      UPDATE strategies SET status = ${transicion.destino}::strategy_status, updated_at = now()
+      WHERE id = ${id} AND status::text = ${actual}
       RETURNING id
     `;
-    if (rows.length === 0) return { ok: false, mensaje: "Estrategia no encontrada." };
+    if (rows.length === 0) return { ok: false, mensaje: "La estrategia cambió de estado: reintenta." };
     revalidatePath("/estrategias");
     revalidatePath("/pipeline");
     revalidatePath("/");
-    return { ok: true, mensaje: `Estrategia movida a ${nuevo}.` };
+    return { ok: true, mensaje: `Estrategia movida a ${transicion.destino}.` };
   } catch (err) {
     console.error("[acciones] cambiarEstadoEstrategia:", err);
     return { ok: false, mensaje: "Error al actualizar la estrategia." };

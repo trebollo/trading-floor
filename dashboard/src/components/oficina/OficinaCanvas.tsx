@@ -7,7 +7,6 @@ import type { AgenteOficina, OficinaData } from "@/lib/oficina";
 import { DepartamentoPanel } from "./DepartamentoPanel";
 import { AgentCard } from "./AgentCard";
 import { WallPanel } from "./WallPanel";
-import { relativo } from "@/lib/format";
 
 const NIVEL_COLOR = { info: "#34d399", aviso: "#fbbf24", critico: "#f87171" } as const;
 
@@ -56,6 +55,13 @@ export function OficinaCanvas({ datos: datosIniciales }: { datos: OficinaData })
     renderRef.current?.actualizarDatos(datos);
   }, [datos]);
 
+  // En modo live, las nuevas instantáneas del servidor (revalidación ISR o
+  // router.refresh) se adoptan tal cual; la simulación solo corre en demo, así
+  // que no hay estado local que preservar.
+  useEffect(() => {
+    if (datosIniciales.fuente === "live") setDatos(datosIniciales);
+  }, [datosIniciales]);
+
   // Simulación en vivo (solo demo): la oficina respira mientras se depura la UI.
   useEffect(() => {
     if (datosIniciales.fuente !== "demo") return;
@@ -100,7 +106,7 @@ export function OficinaCanvas({ datos: datosIniciales }: { datos: OficinaData })
 
   return (
     <div className="relative h-[calc(100dvh-3.5rem)] w-full overflow-hidden">
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />
 
       {/* HUD superior izquierdo: cómo se maneja */}
       <div className="pointer-events-none absolute left-4 top-4 rounded-lg border border-[var(--color-borde)] bg-black/50 px-3 py-2 text-[11px] text-zinc-400 backdrop-blur">
@@ -158,7 +164,7 @@ export function OficinaCanvas({ datos: datosIniciales }: { datos: OficinaData })
                 <div key={e.id} className="flex items-start gap-2 text-[11px]">
                   <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: NIVEL_COLOR[e.nivel] }} />
                   <span className="shrink-0 font-mono text-zinc-600">
-                    {new Date(e.ts).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    {new Date(e.ts).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Europe/Madrid" })}
                   </span>
                   <span className="shrink-0 font-medium" style={{ color: colorDeDepto(e.departamento) }}>
                     {e.departamento
@@ -182,7 +188,10 @@ export function OficinaCanvas({ datos: datosIniciales }: { datos: OficinaData })
                 : "Sistema"}
             </span>
             <span key={ultimoEvento.id} className="flex-1 truncate text-zinc-300">{ultimoEvento.texto}</span>
-            <span className="shrink-0 text-[10px] text-zinc-600">{relativo(ultimoEvento.ts)}</span>
+            {/* Hora fija con zona explícita: determinista entre servidor y cliente (sin hydration mismatch). */}
+            <span className="shrink-0 text-[10px] text-zinc-600">
+              {new Date(ultimoEvento.ts).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Madrid" })}
+            </span>
             <span className="shrink-0 text-[10px] text-zinc-600">{feedAbierto ? "▾" : "▴"}</span>
           </button>
         </div>

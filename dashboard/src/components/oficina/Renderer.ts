@@ -110,6 +110,13 @@ export class OficinaRenderer {
 
   destruir() {
     cancelAnimationFrame(this.raf);
+    const c = this.canvas;
+    c.removeEventListener("pointerdown", this.onDown);
+    c.removeEventListener("pointermove", this.onMove);
+    window.removeEventListener("pointerup", this.onUp);
+    window.removeEventListener("pointercancel", this.onCancel);
+    c.removeEventListener("wheel", this.onWheel);
+    c.removeEventListener("pointerleave", this.onLeave);
   }
 
   /** Sustituye los datos (tick de simulación / regeneración) sin perder cámara ni selección. */
@@ -126,11 +133,9 @@ export class OficinaRenderer {
     c.addEventListener("pointerdown", this.onDown);
     c.addEventListener("pointermove", this.onMove);
     window.addEventListener("pointerup", this.onUp);
+    window.addEventListener("pointercancel", this.onCancel);
     c.addEventListener("wheel", this.onWheel, { passive: false });
-    c.addEventListener("pointerleave", () => {
-      this.hoverDepto = null;
-      this.hoverAgente = null;
-    });
+    c.addEventListener("pointerleave", this.onLeave);
   }
 
   private pos(e: { clientX: number; clientY: number }) {
@@ -182,12 +187,29 @@ export class OficinaRenderer {
     this.canvas.style.cursor = hitA || this.hoverDepto || this.hoverWall ? "pointer" : "grab";
   };
 
+  private onLeave = () => {
+    this.hoverDepto = null;
+    this.hoverAgente = null;
+    this.hoverWall = false;
+  };
+
+  private onCancel = (e: PointerEvent) => {
+    this.punteros.delete(e.pointerId);
+    if (this.punteros.size < 2) this.pinchPrev = null;
+    if (this.punteros.size === 0) {
+      this.arrastrando = false;
+      this.movio = false;
+    }
+  };
+
   private onUp = (e: PointerEvent) => {
+    // Un gesto (pellizco a dos dedos) nunca termina en selección.
+    const eraGesto = this.punteros.size > 1;
     this.punteros.delete(e.pointerId);
     if (this.punteros.size < 2) this.pinchPrev = null;
     if (!this.arrastrando) return;
     this.arrastrando = false;
-    if (this.movio || e.pointerType === "touch") return;
+    if (this.movio || eraGesto) return;
 
     // Clic: agente primero, luego wall, luego sala
     const p = this.pos(e);
@@ -234,8 +256,9 @@ export class OficinaRenderer {
     for (const d of this.datos.departamentos) {
       for (const a of d.agentes) {
         const { sx: ax, sy: ay } = mundoAPantalla(a.x, a.y, this.cam);
-        const dist = Math.hypot(sx - ax, sy - (ay - 14 * this.cam.zoom));
-        if (dist < 22 * this.cam.zoom && dist < dMejor) {
+        // Centro del cuerpo (cabeza + torso), con margen holgado para el dedo/cursor.
+        const dist = Math.hypot(sx - ax, sy - (ay - 16 * this.cam.zoom));
+        if (dist < 24 * this.cam.zoom && dist < dMejor) {
           mejor = a;
           dMejor = dist;
         }

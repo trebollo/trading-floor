@@ -47,6 +47,12 @@ simuladas y etiquetadas). Con `DATABASE_URL` lee las tablas reales
   existe como tabla (telemetría de fase 4).
 - Los límites de riesgo se muestran como espejo de `config/guardrails.yaml`; su
   edición desde la web se aplicará vía directriz auditable con validación.
-- No hay autenticación: en despliegue real, proteger detrás del SSO/proxy del CEO.
+- **Gobernanza en modo live sin desplegar todavía**: las Server Actions ya validan
+  el ciclo de vida de las estrategias (transiciones permitidas con
+  compare-and-swap) pero **no hay autenticación ni autorización del CEO**, ni
+  registro en `audit_log` de las mutaciones, y el cambio de modo solo publica una
+  directriz sin confirmación de aplicación. Con `DATABASE_URL` configurado, el
+  dashboard debe quedar detrás del SSO/proxy del CEO y sin acceso público hasta
+  integrar autenticación y auditoría.
 - El refresco es por regeneración incremental (20 s); el streaming en vivo desde
   NATS llegaría con la API de plataforma de la fase 4.
