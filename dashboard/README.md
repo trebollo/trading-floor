@@ -7,8 +7,11 @@ UI web de gobierno y observabilidad del sistema multiagente. Implementa el
 
 - **Next.js 15** (App Router, Server Components y Server Actions) + **React 19** + TypeScript.
 - **Tailwind CSS v4** para el tema oscuro.
-- **Recharts 3** para la telemetría visual (base de los gráficos avanzados futuros:
-  velas de `market_data`, distribuciones Monte Carlo, etc.).
+- **Three.js** para la escena isométrica low-poly de la planta (`/`): orthographic camera 2:1,
+  salas de cristal, agentes facetados y skyline de fondo. Se carga con import dinámico
+  (solo cliente) para no inflar el bundle del server render.
+- **Recharts 3** para la telemetría visual (equity + drawdown; base de los gráficos
+  avanzados futuros: velas de `market_data`, distribuciones Monte Carlo, etc.).
 - **postgres.js** con pool bajo, apto para despliegue serverless (Vercel) contra el
   pooler de Neon/Supabase apuntando a la memoria colectiva (migraciones en `migrations/`).
 
@@ -16,7 +19,7 @@ UI web de gobierno y observabilidad del sistema multiagente. Implementa el
 
 | Ruta | Contenido |
 |---|---|
-| `/` | **La Oficina**: planta isométrica interactiva (Canvas 2D) con los 7 departamentos como salas, los agentes como personas en su mesa y la *wall* norte proyectando KPIs y equity. Clic en una sala abre su panel (plantilla, tareas, estrategias con acciones); clic en un agente abre su ficha; clic en la Wall abre la memoria operativa completa (curva de equity, P&L por departamento, alertas). Arrastrar/rueda para navegar y accesos rápidos a cada sala. En modo demo, una simulación en vivo hace respirar la escena: equity y KPIs avanzan, los agentes alternan tareas y un ticker emite los acontecimientos de cada departamento |
+| `/` | **La Oficina**: planta isométrica low-poly en Three.js con los 7 departamentos como salas de cristal, agentes en sus mesas y la *wall* norte proyectando KPIs y equity. HUD con chips de navegación, ticker inferior filtrable por sala y paneles laterales (plantilla, estrategias con acciones, memoria operativa con equity+drawdown y P&L por departamento). Arrastrar/rueda para navegar. En modo demo, una simulación en vivo hace respirar la escena |
 | `/resumen` | KPIs (P&L, exposición, presupuesto LLM), curva de equity, alertas, estado de departamentos, conmutador de modo del sistema |
 | `/estrategias` | Catálogo con ciclo de vida y acciones (pausar/retirar/bloquear) con doble confirmación |
 | `/pipeline` | Embudo de investigación por etapa y evaluaciones recientes |

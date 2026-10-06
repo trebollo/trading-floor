@@ -19,11 +19,14 @@ export function AgentCard({
 }) {
   const est = ESTADO_AGENTE[agente.estado];
   return (
-    <div className="absolute bottom-4 left-4 z-10 w-80 rounded-xl border border-[var(--color-borde)] bg-[var(--color-lienzo)]/95 p-4 shadow-xl backdrop-blur">
+    <div className="absolute bottom-24 left-4 z-10 w-80 rounded-xl border border-[var(--color-borde)] bg-[var(--color-lienzo)]/95 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl">
       <div className="flex items-start gap-3">
         <span
           className="mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold text-black"
-          style={{ background: departamento?.color ?? "#64748b" }}
+          style={{
+            background: departamento?.color ?? "#64748b",
+            boxShadow: `0 0 14px ${departamento?.color ?? "#64748b"}55`,
+          }}
         >
           {agente.rol.slice(0, 1)}
         </span>

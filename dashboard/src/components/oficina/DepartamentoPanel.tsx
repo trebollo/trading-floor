@@ -22,11 +22,14 @@ const ESTADO_AGENTE = {
 export function DepartamentoPanel({ depto, onCerrar }: { depto: DeptoOficina; onCerrar: () => void }) {
   return (
     <aside
-      className="absolute right-0 top-0 z-10 flex h-full w-full max-w-sm flex-col border-l border-[var(--color-borde)] bg-[var(--color-lienzo)]/92 backdrop-blur"
-      style={{ borderRight: `2px solid ${depto.color}55` }}
+      className="absolute right-0 top-0 z-10 flex h-full w-full max-w-sm flex-col border-l border-[var(--color-borde)] bg-[var(--color-lienzo)]/94 backdrop-blur-xl"
+      style={{ borderRight: `2px solid ${depto.color}66` }}
     >
       <header className="flex items-start gap-3 border-b border-[var(--color-borde)] p-4">
-        <span className="mt-1 inline-block h-3 w-3 rounded-full" style={{ background: depto.color }} />
+        <span
+          className="mt-1 inline-block h-3 w-3 rounded-full"
+          style={{ background: depto.color, boxShadow: `0 0 12px ${depto.color}88` }}
+        />
         <div className="flex-1">
           <h2 className="text-base font-semibold">{depto.nombre}</h2>
           <p className="text-xs text-zinc-500">{depto.descripcion}</p>

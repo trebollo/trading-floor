@@ -1,50 +1,75 @@
 "use client";
 
+// Contenedor del piso de trading: escena Three.js + HUD + paneles + ticker.
+// La escena se importa de forma dinámica (solo cliente) para no inflar el bundle SSR.
+
 import { useEffect, useRef, useState } from "react";
-import { OficinaRenderer } from "./Renderer";
 import { avanzarOficina } from "@/lib/oficina";
 import type { AgenteOficina, OficinaData } from "@/lib/oficina";
 import { DepartamentoPanel } from "./DepartamentoPanel";
 import { AgentCard } from "./AgentCard";
 import { WallPanel } from "./WallPanel";
+import { HudOficina } from "./HudOficina";
+import { TickerOficina } from "./TickerOficina";
 
-const NIVEL_COLOR = { info: "#34d399", aviso: "#fbbf24", critico: "#f87171" } as const;
+type EscenaModulo = typeof import("./EscenaOficina");
+type EscenaInstancia = InstanceType<EscenaModulo["EscenaOficina"]>;
 
 export function OficinaCanvas({ datos: datosIniciales }: { datos: OficinaData }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const renderRef = useRef<OficinaRenderer | null>(null);
+  const escenaRef = useRef<EscenaInstancia | null>(null);
   const [datos, setDatos] = useState(datosIniciales);
   const [deptoSel, setDeptoSel] = useState<string | null>(null);
   const [agenteSel, setAgenteSel] = useState<AgenteOficina | null>(null);
   const [wallSel, setWallSel] = useState(false);
-  const [feedAbierto, setFeedAbierto] = useState(false);
   const [listo, setListo] = useState(false);
+  const [cargando, setCargando] = useState(true);
+  const [errorEscena, setErrorEscena] = useState<string | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const renderer = new OficinaRenderer(canvas, datosIniciales, {
-      onDepto: (id) => setDeptoSel(id),
-      onAgente: (a) => setAgenteSel(a),
-      onWall: (sel) => setWallSel(sel),
-    });
-    renderRef.current = renderer;
-    setListo(true);
+    let cancelado = false;
+    let limpieza: (() => void) | undefined;
 
-    const resizeReal = () => {
-      const r = canvas.getBoundingClientRect();
-      renderer.redimensionar(r.width, r.height, window.devicePixelRatio || 1);
-    };
-    resizeReal();
-    window.addEventListener("resize", resizeReal);
-    const ro = new ResizeObserver(resizeReal);
-    ro.observe(canvas);
+    import("./EscenaOficina")
+      .then(({ EscenaOficina }) => {
+        if (cancelado || !canvasRef.current) return;
+        const escena = new EscenaOficina(canvas, datosIniciales, {
+          onDepto: (id) => setDeptoSel(id),
+          onAgente: (a) => setAgenteSel(a),
+          onWall: (sel) => setWallSel(sel),
+        });
+        escenaRef.current = escena;
+        setListo(true);
+        setCargando(false);
+
+        const resizeReal = () => {
+          const r = canvas.getBoundingClientRect();
+          escena.redimensionar(r.width, r.height, window.devicePixelRatio || 1);
+        };
+        resizeReal();
+        window.addEventListener("resize", resizeReal);
+        const ro = new ResizeObserver(resizeReal);
+        ro.observe(canvas);
+
+        limpieza = () => {
+          window.removeEventListener("resize", resizeReal);
+          ro.disconnect();
+          escena.destruir();
+          escenaRef.current = null;
+        };
+      })
+      .catch((err: unknown) => {
+        if (cancelado) return;
+        console.error("No se pudo montar la escena 3D:", err);
+        setErrorEscena(err instanceof Error ? err.message : "Error desconocido al montar WebGL");
+        setCargando(false);
+      });
 
     return () => {
-      window.removeEventListener("resize", resizeReal);
-      ro.disconnect();
-      renderer.destruir();
-      renderRef.current = null;
+      cancelado = true;
+      limpieza?.();
     };
     // El renderer se monta una sola vez; los datos entran vía actualizarDatos.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -52,17 +77,15 @@ export function OficinaCanvas({ datos: datosIniciales }: { datos: OficinaData })
 
   // La escena siempre dibuja los últimos datos sin perder cámara ni selección.
   useEffect(() => {
-    renderRef.current?.actualizarDatos(datos);
+    escenaRef.current?.actualizarDatos(datos);
   }, [datos]);
 
-  // En modo live, las nuevas instantáneas del servidor (revalidación ISR o
-  // router.refresh) se adoptan tal cual; la simulación solo corre en demo, así
-  // que no hay estado local que preservar.
+  // En modo live, las instantáneas del servidor se adoptan tal cual.
   useEffect(() => {
     if (datosIniciales.fuente === "live") setDatos(datosIniciales);
   }, [datosIniciales]);
 
-  // Simulación en vivo (solo demo): la oficina respira mientras se depura la UI.
+  // Simulación en vivo (solo demo).
   useEffect(() => {
     if (datosIniciales.fuente !== "demo") return;
     const id = setInterval(() => {
@@ -73,131 +96,71 @@ export function OficinaCanvas({ datos: datosIniciales }: { datos: OficinaData })
   }, [datosIniciales.fuente]);
 
   const depto = datos.departamentos.find((d) => d.id === deptoSel) ?? null;
-  // El agente seleccionado sigue vivo tras los ticks de simulación.
   const agente = agenteSel
     ? (datos.departamentos.flatMap((d) => d.agentes).find((a) => a.id === agenteSel.id) ?? agenteSel)
     : null;
-
-  const ultimoEvento = datos.eventos[datos.eventos.length - 1];
-  const colorDeDepto = (id: string | null) =>
-    id ? (datos.departamentos.find((d) => d.id === id)?.color ?? "#94a3b8") : "#94a3b8";
 
   const irADepto = (id: string | null) => {
     setAgenteSel(null);
     setWallSel(false);
     setDeptoSel(id);
-    renderRef.current?.seleccionarDepto(id);
-    if (id) renderRef.current?.enfocarDepto(id);
-    else renderRef.current?.resetCamara();
+    escenaRef.current?.seleccionarDepto(id);
+    if (id) escenaRef.current?.enfocarDepto(id);
+    else escenaRef.current?.resetCamara();
   };
 
   const irAWall = () => {
     setAgenteSel(null);
     setDeptoSel(null);
     setWallSel(true);
-    renderRef.current?.seleccionarDepto(null);
-    renderRef.current?.enfocarWall();
+    escenaRef.current?.seleccionarDepto(null);
+    escenaRef.current?.enfocarWall();
   };
 
   const cerrarAgente = () => {
     setAgenteSel(null);
-    renderRef.current?.seleccionarAgente(null);
+    escenaRef.current?.seleccionarAgente(null);
   };
 
   return (
     <div className="relative h-[calc(100dvh-3.5rem)] w-full overflow-hidden">
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />
 
-      {/* HUD superior izquierdo: cómo se maneja */}
-      <div className="pointer-events-none absolute left-4 top-4 rounded-lg border border-[var(--color-borde)] bg-black/50 px-3 py-2 text-[11px] text-zinc-400 backdrop-blur">
-        <p><span className="text-zinc-200">Arrastra</span> para mover · <span className="text-zinc-200">rueda</span> para zoom</p>
-        <p><span className="text-zinc-200">Clic en una sala</span> para entrar · <span className="text-zinc-200">clic en la Wall</span> para la memoria operativa</p>
-      </div>
+      {/* Viñeta / marco premium */}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_0%,transparent_40%,rgba(3,6,12,0.45)_100%)]" />
 
-      {/* Accesos rápidos (bajo el HUD, fuera del alcance de los paneles) */}
+      {cargando && (
+        <div className="absolute inset-0 flex items-center justify-center bg-[var(--color-lienzo)]">
+          <div className="text-center">
+            <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-emerald-400/30 border-t-emerald-400" />
+            <p className="mt-3 text-sm text-zinc-400">Montando la planta del trading floor…</p>
+          </div>
+        </div>
+      )}
+
+      {errorEscena && (
+        <div className="absolute inset-x-0 top-1/3 z-10 mx-auto max-w-md rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-center backdrop-blur">
+          <p className="text-sm font-medium text-amber-200">Escena 3D no disponible</p>
+          <p className="mt-1 text-xs text-amber-100/70">{errorEscena}</p>
+          <p className="mt-2 text-[11px] text-zinc-400">
+            Los paneles, el ticker y la memoria operativa siguen operativos.
+          </p>
+        </div>
+      )}
+
       {listo && (
-        <div className="absolute left-4 top-24 z-10 flex max-w-[290px] flex-wrap gap-1.5">
-          <button
-            type="button"
-            onClick={() => irADepto(null)}
-            className={`rounded-lg border px-2.5 py-1 text-[11px] backdrop-blur ${
-              !deptoSel && !wallSel
-                ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200"
-                : "border-[var(--color-borde)] bg-black/60 text-zinc-300 hover:bg-black/80"
-            }`}
-          >
-            Vista general
-          </button>
-          <button
-            type="button"
-            onClick={irAWall}
-            className={`rounded-lg border px-2.5 py-1 text-[11px] backdrop-blur ${
-              wallSel
-                ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200"
-                : "border-[var(--color-borde)] bg-black/60 text-zinc-300 hover:bg-black/80"
-            }`}
-          >
-            Wall
-          </button>
-          {datos.departamentos.map((d) => (
-            <button
-              key={d.id}
-              type="button"
-              onClick={() => irADepto(d.id)}
-              className={`rounded-lg border px-2.5 py-1 text-[11px] backdrop-blur ${
-                deptoSel === d.id ? "text-zinc-100" : "border-[var(--color-borde)] bg-black/60 text-zinc-300 hover:bg-black/80"
-              }`}
-              style={deptoSel === d.id ? { borderColor: `${d.color}88`, background: `${d.color}1f` } : undefined}
-            >
-              {d.nombre}
-            </button>
-          ))}
-        </div>
+        <HudOficina
+          datos={datos}
+          deptoSel={deptoSel}
+          wallSel={wallSel}
+          onIrGeneral={() => irADepto(null)}
+          onIrWall={irAWall}
+          onIrDepto={(id) => irADepto(id)}
+        />
       )}
 
-      {/* Ticker de eventos */}
-      {ultimoEvento && (
-        <div className="absolute bottom-4 left-1/2 z-10 w-full max-w-xl -translate-x-1/2">
-          {feedAbierto && (
-            <div className="mb-2 max-h-72 space-y-1 overflow-y-auto rounded-xl border border-[var(--color-borde)] bg-black/80 p-3 backdrop-blur">
-              {[...datos.eventos].reverse().map((e) => (
-                <div key={e.id} className="flex items-start gap-2 text-[11px]">
-                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: NIVEL_COLOR[e.nivel] }} />
-                  <span className="shrink-0 font-mono text-zinc-600">
-                    {new Date(e.ts).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Europe/Madrid" })}
-                  </span>
-                  <span className="shrink-0 font-medium" style={{ color: colorDeDepto(e.departamento) }}>
-                    {e.departamento
-                      ? (datos.departamentos.find((d) => d.id === e.departamento)?.nombre ?? e.departamento)
-                      : "Sistema"}
-                  </span>
-                  <span className="text-zinc-300">{e.texto}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => setFeedAbierto((v) => !v)}
-            className="flex w-full items-center gap-2 rounded-lg border border-[var(--color-borde)] bg-black/70 px-3 py-2 text-left text-xs backdrop-blur hover:bg-black/80"
-          >
-            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full" style={{ background: NIVEL_COLOR[ultimoEvento.nivel] }} />
-            <span className="shrink-0 font-medium" style={{ color: colorDeDepto(ultimoEvento.departamento) }}>
-              {ultimoEvento.departamento
-                ? (datos.departamentos.find((d) => d.id === ultimoEvento.departamento)?.nombre ?? ultimoEvento.departamento)
-                : "Sistema"}
-            </span>
-            <span key={ultimoEvento.id} className="flex-1 truncate text-zinc-300">{ultimoEvento.texto}</span>
-            {/* Hora fija con zona explícita: determinista entre servidor y cliente (sin hydration mismatch). */}
-            <span className="shrink-0 text-[10px] text-zinc-600">
-              {new Date(ultimoEvento.ts).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Madrid" })}
-            </span>
-            <span className="shrink-0 text-[10px] text-zinc-600">{feedAbierto ? "▾" : "▴"}</span>
-          </button>
-        </div>
-      )}
+      <TickerOficina datos={datos} />
 
-      {/* Ficha del agente */}
       {agente && (
         <AgentCard
           agente={agente}
@@ -206,19 +169,15 @@ export function OficinaCanvas({ datos: datosIniciales }: { datos: OficinaData })
         />
       )}
 
-      {/* Panel de la Wall (memoria operativa) */}
-      {wallSel && !agente && (
-        <WallPanel datos={datos} onCerrar={() => setWallSel(false)} />
-      )}
+      {wallSel && !agente && <WallPanel datos={datos} onCerrar={() => setWallSel(false)} />}
 
-      {/* Panel del departamento */}
       {depto && !agente && !wallSel && (
         <DepartamentoPanel
           key={depto.id}
           depto={depto}
           onCerrar={() => {
             setDeptoSel(null);
-            renderRef.current?.seleccionarDepto(null);
+            escenaRef.current?.seleccionarDepto(null);
           }}
         />
       )}
