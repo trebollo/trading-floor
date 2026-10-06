@@ -34,20 +34,25 @@ class PostgresAuditLog(AuditLog):
         self._conn.execute(DDL.format(table=table))
 
     def append(self, actor: str, event_type: str, payload: dict[str, Any]) -> AuditEntry:
-        row = self._conn.execute(
-            f"SELECT COALESCE(MAX(seq), 0), COALESCE((SELECT hash FROM {self._table} ORDER BY seq DESC LIMIT 1), '') FROM {self._table}"
-        ).fetchone()
-        last_seq, prev_hash = int(row[0]), row[1]
         from datetime import datetime, timezone
 
         ts = datetime.now(timezone.utc).isoformat()
-        h = entry_hash(prev_hash, ts, actor, event_type, payload)
-        self._conn.execute(
-            f"INSERT INTO {self._table} (ts, actor, event_type, payload, prev_hash, hash) VALUES (%s, %s, %s, %s, %s, %s)",
-            (ts, actor, event_type, json_dumps(payload), prev_hash, h),
-        )
+        # Serializa escritores de todos los procesos. Sin el lock, dos contenedores
+        # podrían leer el mismo prev_hash y bifurcar silenciosamente la cadena.
+        with self._conn.transaction():
+            self._conn.execute("SELECT pg_advisory_xact_lock(%s)", (0x54464155444954,))
+            row = self._conn.execute(
+                f"SELECT COALESCE(MAX(seq), 0), COALESCE((SELECT hash FROM {self._table} ORDER BY seq DESC LIMIT 1), '') FROM {self._table}"
+            ).fetchone()
+            last_seq, prev_hash = int(row[0]), row[1]
+            h = entry_hash(prev_hash, ts, actor, event_type, payload)
+            inserted = self._conn.execute(
+                f"INSERT INTO {self._table} (ts, actor, event_type, payload, prev_hash, hash) "
+                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING seq",
+                (ts, actor, event_type, json_dumps(payload), prev_hash, h),
+            ).fetchone()
         return AuditEntry(
-            seq=last_seq + 1, ts=ts, actor=actor, event_type=event_type,
+            seq=int(inserted[0]), ts=ts, actor=actor, event_type=event_type,
             payload=payload, prev_hash=prev_hash, hash=h,
         )
 

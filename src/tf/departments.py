@@ -20,6 +20,7 @@ agentes no guardan estado entre ciclos (regla transversal 1).
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any
 
@@ -174,6 +175,7 @@ class MacroAnalystAgent(Agent):
             "macro.regime.v1",
             {"regime": "adverso" if adverse else "normal", "confidence": 0.6,
              "horizon": "days", "stale": False,
+             "cycle_id": envelope_kwargs.get("correlation_id"),
              "rationale": f"precio {'bajo' if adverse else 'sobre'} su SMA{self.sma_window}"},
             **envelope_kwargs,
         )
@@ -183,23 +185,117 @@ class ChiefOfStaffAgent(Agent):
     """Departamento ejecutivo: tally del ciclo e informe diario para el CEO."""
 
     department = "executive"
-    subscriptions: tuple[str, ...] = ("validation.verdict.v1", "ops.incident.v1", "macro.regime.v1", "news.alert.v1")
+    subscriptions: tuple[str, ...] = (
+        "validation.verdict.v1", "ops.incident.v1", "ops.dead_letter.v1",
+        "macro.regime.v1", "news.alert.v1", "cycle.research_batch.v1",
+        "cycle.macro_news_completed.v1", "cycle.completed.v1",
+    )
 
-    def __init__(self, tally: dict[str, int], **kwargs: Any) -> None:
+    def __init__(self, tally: dict[str, int], state_store: Any | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.tally = tally
+        self.state_store = state_store
 
     def handle(self, envelope: Envelope) -> None:
-        self.tally[envelope.type] = self.tally.get(envelope.type, 0) + 1
+        if envelope.type == "cycle.completed.v1":
+            payload = envelope.payload
+            cycle_id = payload["cycle_id"]
+            if self.state_store is not None:
+                self.state_store.set(f"executive/cycle-meta/{cycle_id}", payload)
+            else:
+                self.tally[f"__cycle_meta__:{cycle_id}"] = payload
+            self._maybe_report(cycle_id)
+            return
 
-    def daily_report(self, cycle_date: str, budget: dict[str, Any], summary: str = "") -> Envelope:
+        cycle_id = envelope.payload.get("cycle_id") or envelope.correlation_id
+        if self.state_store is not None and cycle_id:
+            key = f"executive/tally/{cycle_id}"
+
+            def increment(state: dict[str, Any]) -> dict[str, Any]:
+                state = state or {"counts": {}, "seen": []}
+                # Older rows held only the counts dictionary.
+                if "counts" not in state:
+                    state = {"counts": state, "seen": []}
+                if envelope.id in state["seen"]:
+                    return state
+                counts = state["counts"]
+                counts[envelope.type] = counts.get(envelope.type, 0) + 1
+                if envelope.type == "ops.dead_letter.v1":
+                    counts["ops.incident.v1"] = counts.get("ops.incident.v1", 0) + 1
+                state["seen"].append(envelope.id)
+                return state
+
+            self.state_store.mutate(key, increment, default={})
+            self._maybe_report(cycle_id)
+        else:
+            self.tally[envelope.type] = self.tally.get(envelope.type, 0) + 1
+            if envelope.type == "ops.dead_letter.v1":
+                self.tally["ops.incident.v1"] = self.tally.get("ops.incident.v1", 0) + 1
+
+    def _counts(self, cycle_id: str | None) -> dict[str, int]:
+        if self.state_store is not None and cycle_id:
+            state = self.state_store.get(f"executive/tally/{cycle_id}", {})
+            return state.get("counts", state)
+        return dict(self.tally)
+
+    def _maybe_report(self, cycle_id: str) -> None:
+        if self.state_store is None:
+            meta = self.tally.get(f"__cycle_meta__:{cycle_id}")
+        else:
+            meta = self.state_store.get(f"executive/cycle-meta/{cycle_id}")
+        if not meta:
+            return
+        counts = self._counts(cycle_id)
+        if counts.get("validation.verdict.v1", 0) < meta["validation_count"]:
+            return
+        if counts.get("cycle.macro_news_completed.v1", 0) < 1:
+            return
+        macro_news = meta.get("macro_news", {})
+        if counts.get("news.alert.v1", 0) < macro_news.get("alerts_published", 0):
+            return
+        if macro_news.get("regime_published") and counts.get("macro.regime.v1", 0) < 1:
+            return
+        if counts.get("ops.incident.v1", 0) < macro_news.get("incident_count", 0):
+            return
+        report_key = f"executive/reported/{cycle_id}"
+        if self.state_store is not None and self.state_store.get(report_key, False):
+            return
+        report = self.daily_report(
+            cycle_date=meta["cycle_date"],
+            budget=meta.get("budget", {}),
+            summary=(
+                f"validaciones: {counts.get('validation.verdict.v1', 0)}, "
+                f"incidentes: {counts.get('ops.incident.v1', 0)}, "
+                f"regímenes: {counts.get('macro.regime.v1', 0)}"
+            ),
+            cycle_id=cycle_id,
+        )
+        if self.state_store is not None:
+            self.state_store.set(report_key, {"report_id": report.payload["report_id"]})
+
+    def daily_report(
+        self,
+        cycle_date: str,
+        budget: dict[str, Any],
+        summary: str = "",
+        cycle_id: str | None = None,
+    ) -> Envelope:
+        report_id = (
+            f"rep-{hashlib.sha256(cycle_id.encode()).hexdigest()[:16]}"
+            if cycle_id else f"rep-{uuid.uuid4().hex[:8]}"
+        )
+        envelope_kwargs = {"correlation_id": cycle_id} if cycle_id else {}
+        if cycle_id:
+            envelope_kwargs["id"] = f"executive-report-{cycle_id}"
         return self.publish(
             "executive.daily_report.v1",
             {
-                "report_id": f"rep-{uuid.uuid4().hex[:8]}",
+                "report_id": report_id,
                 "cycle_date": cycle_date,
-                "counts": dict(self.tally),
+                "counts": self._counts(cycle_id),
                 "budget": budget,
                 "summary": summary or "informe del ciclo",
+                "cycle_id": cycle_id,
             },
+            **envelope_kwargs,
         )

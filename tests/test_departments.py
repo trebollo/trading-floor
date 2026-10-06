@@ -126,6 +126,87 @@ class TestMacroAndExecutive:
         assert report.payload["counts"]["macro.regime.v1"] == 1
         assert report.payload["cycle_date"] == "2026-10-05"
 
+    def test_chief_counts_dead_letters_as_incidents(self):
+        bus, audit = InMemoryBus(), SqliteAuditLog()
+        chief = ChiefOfStaffAgent(
+            tally={}, name="chief-of-staff", role="chief_of_staff", bus=bus,
+            broker=broker_for(audit), audit=audit,
+        )
+        chief.receive(make_env("ops.dead_letter.v1", {
+            "department": "research",
+            "original_type": "strategy.proposal.v1",
+            "original_id": "event-1",
+            "original_envelope": {"id": "event-1"},
+            "delivery_count": 3,
+            "error": "RuntimeError: worker error",
+        }))
+
+        report = chief.daily_report("2026-10-06", budget={})
+        assert report.payload["counts"]["ops.dead_letter.v1"] == 1
+        assert report.payload["counts"]["ops.incident.v1"] == 1
+
+    def test_persistent_chief_waits_for_all_cycle_results_before_reporting(self):
+        class StateStore:
+            def __init__(self):
+                self.values = {}
+
+            def get(self, key, default=None):
+                return self.values.get(key, default)
+
+            def set(self, key, value):
+                self.values[key] = value
+
+            def mutate(self, key, update, default=None):
+                value = update(self.get(key, default))
+                self.values[key] = value
+                return value
+
+        bus, audit = InMemoryBus(), SqliteAuditLog()
+        state = StateStore()
+        chief = ChiefOfStaffAgent(
+            tally={}, state_store=state, name="chief-of-staff", role="chief_of_staff",
+            bus=bus, broker=broker_for(audit), audit=audit,
+        )
+        cycle_id = "cycle-persistent"
+        chief.receive(make_env("cycle.completed.v1", {
+            "cycle_id": cycle_id, "cycle_date": "2026-10-06", "dataset_sha256": "abc",
+            "validation_count": 1, "budget": {"eur": 0.0},
+            "macro_news": {"alerts_published": 2, "regime_published": True, "incident_count": 1},
+        }))
+        chief.receive(make_env("cycle.macro_news_completed.v1", {
+            "cycle_id": cycle_id, "regime_published": True, "alerts_published": 2,
+        }))
+        assert not [e for e in bus.published if e.type == "executive.daily_report.v1"]
+
+        chief.receive(make_env("macro.regime.v1", {
+            "regime": "normal", "confidence": 0.6, "horizon": "days",
+            "rationale": "test", "cycle_id": cycle_id,
+        }))
+        for index in range(2):
+            chief.receive(make_env("news.alert.v1", {
+                "alert_id": f"a{index}", "category": "relevant", "confidence": 0.7,
+                "single_source": False, "source": "rss", "quotes": ["dato"],
+                "summary": "dato", "cycle_id": cycle_id,
+            }))
+
+        verdict = make_env("validation.verdict.v1", {
+            "verdict_id": "v1", "spec_id": "s1", "verdict": "VALIDADA",
+            "battery": {}, "skeptic_scenarios": 0, "rationale": "test", "cycle_id": cycle_id,
+        })
+        chief.receive(verdict)
+        assert not [e for e in bus.published if e.type == "executive.daily_report.v1"]
+        chief.receive(make_env("ops.incident.v1", {
+            "incident_id": "incident-1", "severity": "V2", "source": "macro/news",
+            "summary": "fallo news", "detail": "HTTP 429",
+        }).model_copy(update={"correlation_id": cycle_id}))
+        reports = [e for e in bus.published if e.type == "executive.daily_report.v1"]
+        assert len(reports) == 1
+        assert reports[0].payload["cycle_id"] == cycle_id
+        assert reports[0].payload["counts"]["validation.verdict.v1"] == 1
+        assert reports[0].payload["counts"]["ops.incident.v1"] == 1
+        chief.receive(verdict)  # redelivery does not inflate counters or duplicate the report
+        assert len([e for e in bus.published if e.type == "executive.daily_report.v1"]) == 1
+
     def test_macro_without_history_stays_silent(self):
         bus2, audit = InMemoryBus(), SqliteAuditLog()
         macro = MacroAnalystAgent(name="macro-analyst", role="analyst", bus=bus2, broker=broker_for(audit), audit=audit)

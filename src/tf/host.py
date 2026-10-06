@@ -71,7 +71,14 @@ class AgentHost:
 
     # -- registro ------------------------------------------------------------
 
-    def register(self, department: str, workers: dict[str, Worker], msg_types: dict[str, list[str]]) -> None:
+    def register(
+        self,
+        department: str,
+        workers: dict[str, Worker],
+        msg_types: dict[str, list[str]],
+        *,
+        subscribe: bool = True,
+    ) -> None:
         """Registra un departamento.
 
         `workers`: nombre → handler. `msg_types`: nombre de worker → tipos de
@@ -82,7 +89,38 @@ class AgentHost:
         for worker_name, worker in workers.items():
             for msg_type in msg_types.get(worker_name, []):
                 self._subscriptions[msg_type].append(worker)
-                self.bus.subscribe(msg_type, self._make_subscriber(worker_name))
+                if subscribe:
+                    self.bus.subscribe(msg_type, self._make_subscriber(worker_name))
+
+    def process(self, env: Envelope) -> dict[str, Any]:
+        """Procesa un sobre directamente y propaga errores al transporte.
+
+        Lo usa el runner durable: JetStream solo debe ackear cuando todos los
+        handlers y publicaciones de salida hayan terminado. En el modo batch
+        se mantiene `drain()` y su política histórica de aislar excepciones.
+        """
+        if env.id in self._seen:
+            self._dropped_for_dedup += 1
+            self._audit("agent.loop_blocked", {"envelope_id": env.id, "type": env.type})
+            return {"processed": False, "duplicate": True}
+
+        workers = self._subscriptions.get(env.type, [])
+        if not workers:
+            raise ValueError(f"sin worker registrado para {env.type}")
+        for worker in workers:
+            try:
+                outputs = worker(env)
+                for out in outputs or []:
+                    self.bus.publish(out)
+            except Exception as exc:
+                self._audit(
+                    "agent.error",
+                    {"worker": getattr(worker, "__name__", "?"), "type": env.type,
+                     "envelope_id": env.id, "error": f"{type(exc).__name__}: {exc}"},
+                )
+                raise
+        self._seen.add(env.id)
+        return {"processed": True, "duplicate": False}
 
     def _make_subscriber(self, worker_name: str) -> Callable[[Envelope], None]:
         """Handler de bus: encola para el drenaje acotado en vez de ejecutar en línea."""

@@ -7,6 +7,8 @@ sin cambiar los contratos ni el pipeline: misma interfaz, mismos guardarraíles.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -88,7 +90,15 @@ class ResearchTemplateAgent(Agent):
                 return True
         return False
 
-    def generate(self, count: int | None = None) -> list[tuple[Envelope, dict[str, Any]]]:
+    def generate(
+        self,
+        count: int | None = None,
+        *,
+        cycle_id: str | None = None,
+        market_data_uri: str | None = None,
+        market_data_sha256: str | None = None,
+        causation_id: str | None = None,
+    ) -> list[tuple[Envelope, dict[str, Any]]]:
         """Publica propuestas; las bloqueadas por memoria se saltan y quedan auditadas."""
         out = []
         for seed in SEED_HYPOTHESES[: count or len(SEED_HYPOTHESES)]:
@@ -99,7 +109,22 @@ class ResearchTemplateAgent(Agent):
                     payload={"hypothesis": seed["hypothesis"], "reason": "memoria: idea ya fracasada o familia bloqueada"},
                 )
                 continue
-            proposal_id = f"prop-{uuid.uuid4().hex[:8]}"
+            if cycle_id:
+                seed_fingerprint = hashlib.sha256(
+                    json.dumps(seed["spec"], sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()[:16]
+                proposal_id = f"prop-{cycle_id}-{seed_fingerprint}"
+                envelope_id = f"proposal-{cycle_id}-{seed_fingerprint}"
+            else:
+                proposal_id = f"prop-{uuid.uuid4().hex[:8]}"
+                envelope_id = None
+            envelope_kwargs = {
+                key: value for key, value in {
+                    "id": envelope_id,
+                    "correlation_id": cycle_id,
+                    "causation_id": causation_id,
+                }.items() if value is not None
+            }
             env = self.publish(
                 "strategy.proposal.v1",
                 {
@@ -112,7 +137,11 @@ class ResearchTemplateAgent(Agent):
                     "prior_risk_estimate": "0.5% por operación",
                     "cited_lesson_ids": [],
                     "spec": seed["spec"],
+                    "cycle_id": cycle_id,
+                    "market_data_uri": market_data_uri,
+                    "market_data_sha256": market_data_sha256,
                 },
+                **envelope_kwargs,
             )
             out.append((env, seed))
         return out
@@ -136,17 +165,43 @@ class ResearchCoderAgent(Agent):
                 payload={"proposal_id": envelope.payload.get("proposal_id"), "reason": "propuesta sin spec"},
             )
             return
-        self.formalize(envelope.payload["proposal_id"], spec)
+        self.formalize(
+            envelope.payload["proposal_id"],
+            spec,
+            cycle_id=envelope.payload.get("cycle_id"),
+            market_data_uri=envelope.payload.get("market_data_uri"),
+            market_data_sha256=envelope.payload.get("market_data_sha256"),
+            correlation_id=envelope.correlation_id,
+            causation_id=envelope.id,
+        )
 
-    def formalize(self, proposal_id: str, spec: dict[str, Any]) -> Envelope:
+    def formalize(
+        self,
+        proposal_id: str,
+        spec: dict[str, Any],
+        *,
+        cycle_id: str | None = None,
+        market_data_uri: str | None = None,
+        market_data_sha256: str | None = None,
+        correlation_id: str | None = None,
+        causation_id: str | None = None,
+    ) -> Envelope:
+        spec_id = f"spec-{proposal_id}"
+        event_id = f"spec-event-{hashlib.sha256(proposal_id.encode()).hexdigest()[:20]}"
         return self.publish(
             "strategy.spec.v1",
             {
-                "spec_id": f"spec-{uuid.uuid4().hex[:8]}",
+                "spec_id": spec_id,
                 "proposal_id": proposal_id,
                 "spec": spec,
                 "code_dsl": str(spec),
+                "cycle_id": cycle_id,
+                "market_data_uri": market_data_uri,
+                "market_data_sha256": market_data_sha256,
             },
+            id=event_id,
+            correlation_id=correlation_id or cycle_id,
+            causation_id=causation_id,
         )
 
 
@@ -163,51 +218,70 @@ class BacktestEngineerAgent(Agent):
 
     def __init__(
         self,
-        data: MarketData,
-        catalog: list["CatalogEntry"],
-        entries_by_spec: dict[str, "CatalogEntry"],
-        specs_by_id: dict[str, dict],
+        data: MarketData | None,
+        catalog: list["CatalogEntry"] | None,
+        entries_by_spec: dict[str, "CatalogEntry"] | None,
+        specs_by_id: dict[str, dict] | None,
         policy: ValidationPolicy,
         backtest_promotion_sharpe: float = 0.5,
         memory: MemoryStore | None = None,
+        dataset_dir: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.data = data
         self.catalog = catalog
         self.entries_by_spec = entries_by_spec
-        self.specs_by_id = specs_by_id
+        self.specs_by_id = specs_by_id if specs_by_id is not None else {}
         self.policy = policy
         self.backtest_promotion_sharpe = backtest_promotion_sharpe
         self.memory = memory
+        self.dataset_dir = dataset_dir
 
     def handle(self, envelope: Envelope) -> None:
         spec_id = envelope.payload["spec_id"]
         spec = envelope.payload["spec"]
         self.specs_by_id[spec_id] = spec
+        data = self._data_for(envelope.payload)
         try:
             validate_spec(spec)
-            result = run_backtest(self.data, spec, DEFAULT_COSTS).compute_metrics()
+            result = run_backtest(data, spec, DEFAULT_COSTS).compute_metrics()
         except SpecError as exc:
-            self._record(spec_id, spec, "RECHAZAR", f"spec inválido: {exc}", metrics={})
+            self._record(spec_id, spec, "RECHAZAR", f"spec inválido: {exc}", metrics={}, event_id=envelope.id)
             self._append(spec_id, CatalogEntry(spec=spec, backtest_verdict="RECHAZAR", metrics={}, battery=None, final=f"RECHAZADA_SPEC: {exc}"))
-            self._report(spec_id, "RECHAZAR", {}, f"spec inválido: {exc}")
+            self._report(spec_id, "RECHAZAR", {}, f"spec inválido: {exc}", spec, envelope.payload, envelope)
             return
         metrics = result.metrics
         n_trades = metrics["n_trades"]
         profitable = metrics["total_return"] > 0 and metrics["sharpe"] >= self.backtest_promotion_sharpe
         if not profitable or n_trades < self.policy.min_trades:  # B-4 incluido
-            self._record(spec_id, spec, "RECHAZAR", "rechazada en backtest", metrics)
+            self._record(spec_id, spec, "RECHAZAR", "rechazada en backtest", metrics, event_id=envelope.id)
             self._append(spec_id, CatalogEntry(spec=spec, backtest_verdict="RECHAZAR", metrics=metrics, battery=None, final="RECHAZADA_BACKTEST"))
-            self._report(spec_id, "RECHAZAR", metrics, "retorno/sharpe/trades por debajo del umbral")
+            self._report(spec_id, "RECHAZAR", metrics, "retorno/sharpe/trades por debajo del umbral", spec, envelope.payload, envelope)
             return
         self._append(spec_id, CatalogEntry(spec=spec, backtest_verdict="PROMOVER_A_VALIDACION", metrics=metrics, battery=None, final="PROMOVER_A_VALIDACION"))
-        self._report(spec_id, "PROMOVER_A_VALIDACION", metrics, "supera backtest con costes conservadores")
+        self._report(spec_id, "PROMOVER_A_VALIDACION", metrics, "supera backtest con costes conservadores", spec, envelope.payload, envelope)
 
-    def _record(self, spec_id: str, spec: dict, verdict: str, summary: str, metrics: dict) -> None:
+    def _data_for(self, payload: dict[str, Any]) -> MarketData:
+        if self.data is not None:
+            return self.data
+        uri, digest = payload.get("market_data_uri"), payload.get("market_data_sha256")
+        if not uri or not digest or not self.dataset_dir:
+            raise ValueError("strategy.spec carece de snapshot de mercado verificable")
+        from tf.datasets import load_market_snapshot
+
+        return load_market_snapshot(uri, digest, self.dataset_dir)
+
+    def _record(
+        self, spec_id: str, spec: dict, verdict: str, summary: str, metrics: dict,
+        *, event_id: str,
+    ) -> None:
         if self.memory is None:
             return
-        rec = self.memory.add_evaluation(spec_id, "backtest", verdict, summary, spec=spec, metrics=metrics)
+        rec = self.memory.add_evaluation(
+            spec_id, "backtest", verdict, summary, spec=spec, metrics=metrics,
+            record_id=f"eval-backtest-{event_id}",
+        )
         for lesson in LessonExtractor().from_backtest(spec, verdict, metrics or {}):
             self.memory.add_lesson(
                 content=lesson["content"], tags=lesson["tags"],
@@ -215,14 +289,34 @@ class BacktestEngineerAgent(Agent):
             )
 
     def _append(self, spec_id: str, entry: CatalogEntry) -> None:
-        self.catalog.append(entry)
-        self.entries_by_spec[spec_id] = entry
+        if self.catalog is not None:
+            self.catalog.append(entry)
+        if self.entries_by_spec is not None:
+            self.entries_by_spec[spec_id] = entry
 
-    def _report(self, spec_id: str, verdict: str, metrics: dict, rationale: str) -> None:
+    def _report(
+        self,
+        spec_id: str,
+        verdict: str,
+        metrics: dict,
+        rationale: str,
+        spec: dict[str, Any],
+        source: dict[str, Any],
+        envelope: Envelope,
+    ) -> None:
+        report_key = hashlib.sha256(
+            f"{spec_id}|{source.get('market_data_sha256') or 'local'}|{verdict}".encode()
+        ).hexdigest()[:20]
         self.publish(
             "backtest.report.v1",
-            {"report_id": f"rep-{uuid.uuid4().hex[:8]}", "spec_id": spec_id, "verdict": verdict,
-             "metrics": metrics, "variant_count": 0, "rationale": rationale},
+            {"report_id": f"rep-{report_key}", "spec_id": spec_id, "verdict": verdict,
+             "metrics": metrics, "variant_count": 0, "rationale": rationale, "spec": spec,
+             "proposal_id": source.get("proposal_id"),
+             "cycle_id": source.get("cycle_id"), "market_data_uri": source.get("market_data_uri"),
+             "market_data_sha256": source.get("market_data_sha256")},
+            id=f"backtest-event-{report_key}",
+            correlation_id=envelope.correlation_id or source.get("cycle_id"),
+            causation_id=envelope.id,
         )
 
 
@@ -239,29 +333,46 @@ class ValidationQuantAgent(Agent):
 
     def __init__(
         self,
-        data: MarketData,
-        catalog: list["CatalogEntry"],
-        entries_by_spec: dict[str, "CatalogEntry"],
-        specs_by_id: dict[str, dict],
+        data: MarketData | None,
+        catalog: list["CatalogEntry"] | None,
+        entries_by_spec: dict[str, "CatalogEntry"] | None,
+        specs_by_id: dict[str, dict] | None,
         policy: ValidationPolicy,
         memory: MemoryStore | None = None,
+        dataset_dir: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.data = data
         self.catalog = catalog
-        self.entries_by_spec = entries_by_spec
-        self.specs_by_id = specs_by_id
+        self.entries_by_spec = entries_by_spec if entries_by_spec is not None else {}
+        self.specs_by_id = specs_by_id if specs_by_id is not None else {}
         self.policy = policy
         self.memory = memory
+        self.dataset_dir = dataset_dir
 
     def handle(self, envelope: Envelope) -> None:
         report = envelope.payload
-        if report["verdict"] != "PROMOVER_A_VALIDACION":
-            return  # las rechazadas por backtest terminaron ahí
         spec_id = report["spec_id"]
-        spec = self.specs_by_id[spec_id]
-        battery: BatteryResult = run_battery(self.data, spec, self.policy, seed=42)
+        cycle_id = report.get("cycle_id")
+        spec = report.get("spec") or self.specs_by_id.get(spec_id)
+        if not spec:
+            raise ValueError(f"backtest.report {spec_id} sin spec autocontenido")
+        if report["verdict"] != "PROMOVER_A_VALIDACION":
+            verdict_key = hashlib.sha256(f"{spec_id}|{report.get('market_data_sha256')}|RECHAZADA".encode()).hexdigest()[:20]
+            self.publish(
+                "validation.verdict.v1",
+                {"verdict_id": f"ver-{verdict_key}", "spec_id": spec_id,
+                 "verdict": "RECHAZADA", "battery": {}, "skeptic_scenarios": 0,
+                 "rationale": f"rechazada en backtest: {report['rationale']}", "cycle_id": cycle_id,
+                 "proposal_id": report.get("proposal_id")},
+                id=f"validation-event-{verdict_key}",
+                correlation_id=envelope.correlation_id or cycle_id,
+                causation_id=envelope.id,
+            )
+            return
+        data = self._data_for(report)
+        battery: BatteryResult = run_battery(data, spec, self.policy, seed=42)
         non_regime = {k: v for k, v in battery.checks.items() if k != "regimen_stress"}
         if battery.all_passed:
             final = "VALIDADA"
@@ -271,21 +382,44 @@ class ValidationQuantAgent(Agent):
             final = "VALIDADA_PROVISIONAL"
         else:
             final = "RECHAZADA_BATERIA"
-        entry = self.entries_by_spec[spec_id]
-        entry.battery = battery.checks
-        entry.final = final
+        entry = self.entries_by_spec.get(spec_id)
+        if entry is not None:
+            entry.battery = battery.checks
+            entry.final = final
         if self.memory is not None:
-            rec = self.memory.add_evaluation(spec_id, "validation", final, "batería canónica", spec=spec, metrics=report["metrics"])
+            rec = self.memory.add_evaluation(
+                spec_id, "validation", final, "batería canónica", spec=spec,
+                metrics=report["metrics"], record_id=f"eval-validation-{envelope.id}",
+            )
             for lesson in LessonExtractor().from_battery(spec, battery.checks, battery.details):
                 self.memory.add_lesson(
                     content=lesson["content"], tags=lesson["tags"],
                     source_evaluation_id=rec.id, family_key=lesson["family_key"],
                 )
+        verdict_key = hashlib.sha256(
+            f"{spec_id}|{report.get('market_data_sha256')}|{final}".encode()
+        ).hexdigest()[:20]
         self.publish(
             "validation.verdict.v1",
-            {"verdict_id": f"ver-{uuid.uuid4().hex[:8]}", "spec_id": spec_id, "verdict": final,
-             "battery": battery.checks, "skeptic_scenarios": 0, "rationale": "batería canónica determinista"},
+            {"verdict_id": f"ver-{verdict_key}", "spec_id": spec_id,
+             "verdict": final if final in ("VALIDADA", "VALIDADA_PROVISIONAL") else "RECHAZADA",
+             "battery": battery.checks, "skeptic_scenarios": 0,
+             "rationale": "batería canónica determinista", "cycle_id": cycle_id,
+             "proposal_id": report.get("proposal_id")},
+            id=f"validation-event-{verdict_key}",
+            correlation_id=envelope.correlation_id or cycle_id,
+            causation_id=envelope.id,
         )
+
+    def _data_for(self, report: dict[str, Any]) -> MarketData:
+        if self.data is not None:
+            return self.data
+        uri, digest = report.get("market_data_uri"), report.get("market_data_sha256")
+        if not uri or not digest or not self.dataset_dir:
+            raise ValueError("backtest.report carece de snapshot de mercado verificable")
+        from tf.datasets import load_market_snapshot
+
+        return load_market_snapshot(uri, digest, self.dataset_dir)
 
 
 # ---------------------------------------------------------------------------

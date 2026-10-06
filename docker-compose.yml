@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: trading
       POSTGRES_DB: trading_floor
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d:ro
@@ -19,13 +19,231 @@ services:
 
   nats:
     image: nats:2
-    command: ["-js", "-m", "8222"]  # JetStream activado + monitor
+    command: ["-js", "-m", "8222", "-sd", "/data"]  # JetStream persistente + monitor
     ports:
-      - "4222:4222"
-      - "8222:8222"
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
     volumes:
       - natsdata:/data
+
+  # La imagen oficial de NATS es distroless; el monitor HTTP se sondea desde este sidecar.
+  nats-health:
+    image: busybox:1.37
+    depends_on:
+      nats:
+        condition: service_started
+    command: ["sh", "-c", "while true; do wget -q -O /dev/null http://nats:8222/healthz || exit 1; sleep 2; done"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://nats:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Vertical slice containerizada de transición: mantiene el ciclo actual intacto
+  # mientras los departamentos se migran al runner durable de tf.runner.
+  tf-cycle:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      TF_NATS_URL: nats://nats:4222
+      TF_DATABASE_URL: postgresql://trading:trading@postgres:5432/trading_floor
+      DATABASE_URL: postgres://trading:trading@postgres:5432/trading_floor?sslmode=disable
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+    volumes:
+      - trading_state:/var/lib/trading-floor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-health:
+        condition: service_healthy
+    restart: "no"
+
+  dashboard:
+    profiles: [app]
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://trading:trading@postgres:5432/trading_floor?sslmode=disable
+    ports:
+      - "127.0.0.1:3100:3100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Pipeline distribuido inicial: los workers son residentes y solo reciben
+  # triggers manuales del perfil `pipeline`; Risk/Execution siguen en tf-cycle.
+  tf-research:
+    profiles: [pipeline]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "tf.runner", "--department", "research", "--factory", "tf.department_runtime:research_factory"]
+    environment: &pipeline-worker-env
+      TF_NATS_URL: nats://nats:4222
+      TF_DATABASE_URL: postgresql://trading:trading@postgres:5432/trading_floor
+      TF_DATASET_DIR: /var/lib/trading-floor/datasets
+      TF_MAX_DELIVER: "3"
+      TF_ACK_WAIT_SECONDS: "120"
+      TF_MAX_ACK_PENDING: "16"
+    volumes:
+      - trading_state:/var/lib/trading-floor:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-health:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tf-backtest:
+    profiles: [pipeline]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "tf.runner", "--department", "backtest", "--factory", "tf.department_runtime:backtest_factory", "--queue-group", "batch"]
+    environment:
+      <<: *pipeline-worker-env
+    volumes:
+      - trading_state:/var/lib/trading-floor:ro
+    cpus: 2.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-health:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tf-validation:
+    profiles: [pipeline]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "tf.runner", "--department", "validation", "--factory", "tf.department_runtime:validation_factory", "--queue-group", "batch"]
+    environment:
+      <<: *pipeline-worker-env
+    volumes:
+      - trading_state:/var/lib/trading-floor:ro
+    cpus: 2.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-health:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tf-macro-news:
+    profiles: [pipeline]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "tf.runner", "--department", "macro", "--factory", "tf.department_runtime:macro_news_factory"]
+    environment:
+      <<: *pipeline-worker-env
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+    volumes:
+      - trading_state:/var/lib/trading-floor:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-health:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tf-executive:
+    profiles: [pipeline]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "tf.runner", "--department", "executive", "--factory", "tf.department_runtime:executive_factory"]
+    environment:
+      <<: *pipeline-worker-env
+    volumes:
+      - trading_state:/var/lib/trading-floor:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-health:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tf-ingest:
+    profiles: [pipeline]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "scripts/ingest_data.py", "AAPL", "--start", "${TF_DATA_START:-20150101}", "--out", "/var/lib/trading-floor/data"]
+    volumes:
+      - trading_state:/var/lib/trading-floor
+    restart: "no"
+
+  tf-pipeline:
+    profiles: [manual]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "scripts/run_distributed_pipeline.py"]
+    environment:
+      TF_NATS_URL: nats://nats:4222
+      TF_DATABASE_URL: postgresql://trading:trading@postgres:5432/trading_floor
+      TF_DATASET_DIR: /var/lib/trading-floor/datasets
+      TF_MARKET_DATA: /var/lib/trading-floor/data/aapl.csv
+    volumes:
+      - trading_state:/var/lib/trading-floor
+    depends_on:
+      tf-ingest:
+        condition: service_completed_successfully
+      tf-research:
+        condition: service_started
+      tf-backtest:
+        condition: service_started
+      tf-validation:
+        condition: service_started
+      tf-macro-news:
+        condition: service_started
+      tf-executive:
+        condition: service_started
+    restart: "no"
+
+  tf-scheduler:
+    profiles: [pipeline]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "scripts/run_pipeline_scheduler.py"]
+    environment:
+      TF_NATS_URL: nats://nats:4222
+      TF_DATABASE_URL: postgresql://trading:trading@postgres:5432/trading_floor
+      TF_DATASET_DIR: /var/lib/trading-floor/datasets
+      TF_MARKET_DATA: /var/lib/trading-floor/data/aapl.csv
+      TF_SCHEDULE_UTC: ${TF_SCHEDULE_UTC:-22:00}
+      TF_DATA_START: ${TF_DATA_START:-20150101}
+      TF_PIPELINE_TIMEOUT: ${TF_PIPELINE_TIMEOUT:-300}
+    volumes:
+      - trading_state:/var/lib/trading-floor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-health:
+        condition: service_healthy
+      tf-research:
+        condition: service_started
+      tf-backtest:
+        condition: service_started
+      tf-validation:
+        condition: service_started
+      tf-macro-news:
+        condition: service_started
+      tf-executive:
+        condition: service_started
+    restart: unless-stopped
 
 volumes:
   pgdata:
   natsdata:
+  trading_state:

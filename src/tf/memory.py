@@ -100,9 +100,14 @@ class MemoryStore:
         summary: str,
         spec: dict[str, Any] | None = None,
         metrics: dict[str, float] | None = None,
+        record_id: str | None = None,
     ) -> EvaluationRecord:
+        if record_id is not None:
+            existing = next((e for e in self.evaluations if e.id == record_id), None)
+            if existing is not None:
+                return existing
         rec = EvaluationRecord(
-            id=f"eval-{uuid.uuid4().hex[:8]}",
+            id=record_id or f"eval-{uuid.uuid4().hex[:8]}",
             spec_id=spec_id,
             kind=kind,
             verdict=verdict,
@@ -122,7 +127,8 @@ class MemoryStore:
         emb = embed(content)
         for lesson in self.lessons:
             if cosine(emb, lesson.embedding) >= DEDUP_SIMILARITY:
-                lesson.times_referenced += 1
+                if source_evaluation_id is None or lesson.source_evaluation_id != source_evaluation_id:
+                    lesson.times_referenced += 1
                 return None  # deduplicada: ya se aprendió esto
         lesson = Lesson(
             id=f"les-{uuid.uuid4().hex[:8]}",
@@ -162,6 +168,10 @@ class MemoryStore:
     # -- persistencia (memoria colectiva que sobrevive reinicios; auditoría aparte) --
 
     def save(self, path: str | Path) -> None:
+        Path(path).write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Representación portable para JSON/SQLite/Postgres."""
         data = {
             "lessons": [
                 {
@@ -172,11 +182,14 @@ class MemoryStore:
             ],
             "evaluations": [e.__dict__ for e in self.evaluations],
         }
-        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        return data
 
     @classmethod
     def load(cls, path: str | Path) -> "MemoryStore":
-        raw = json.loads(Path(path).read_text())
+        return cls.from_dict(json.loads(Path(path).read_text()))
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "MemoryStore":
         store = cls()
         for l in raw.get("lessons", []):
             lesson = Lesson(
@@ -191,6 +204,86 @@ class MemoryStore:
         for e in raw.get("evaluations", []):
             store.evaluations.append(EvaluationRecord(**e))
         return store
+
+
+class PostgresMemoryStore:
+    """MemoryStore compatible backed by one atomically updated Postgres document.
+
+    This adapter allows the initial department split to share learning state
+    without stale local snapshots. The JSON key can later be normalized into
+    `lessons`/`evaluations` tables without changing agent behavior.
+    """
+
+    def __init__(self, state_store: Any, key: str = "collective/memory") -> None:
+        self.state_store = state_store
+        self.key = key
+
+    def _load(self) -> MemoryStore:
+        return MemoryStore.from_dict(self.state_store.get(self.key, {}))
+
+    @property
+    def lessons(self) -> list[Lesson]:
+        return self._load().lessons
+
+    @property
+    def evaluations(self) -> list[EvaluationRecord]:
+        return self._load().evaluations
+
+    def query_lessons(self, context: str, k: int = 5) -> list[Lesson]:
+        return self._load().query_lessons(context, k)
+
+    def family_rejections(self, spec: dict[str, Any]) -> list[EvaluationRecord]:
+        return self._load().family_rejections(spec)
+
+    def is_spec_dead(self, spec: dict[str, Any]) -> bool:
+        return self._load().is_spec_dead(spec)
+
+    def is_family_locked(self, spec: dict[str, Any], max_rejections: int = 3) -> bool:
+        return self._load().is_family_locked(spec, max_rejections=max_rejections)
+
+    def add_evaluation(
+        self,
+        spec_id: str,
+        kind: str,
+        verdict: str,
+        summary: str,
+        spec: dict[str, Any] | None = None,
+        metrics: dict[str, float] | None = None,
+        record_id: str | None = None,
+    ) -> EvaluationRecord:
+        created: dict[str, Any] = {}
+
+        def update(raw: dict[str, Any]) -> dict[str, Any]:
+            memory = MemoryStore.from_dict(raw or {})
+            record = memory.add_evaluation(
+                spec_id, kind, verdict, summary, spec=spec, metrics=metrics, record_id=record_id
+            )
+            created.update(record.__dict__)
+            return memory.to_dict()
+
+        self.state_store.mutate(self.key, update, default={})
+        return EvaluationRecord(**created)
+
+    def add_lesson(
+        self,
+        content: str,
+        tags: list[str] | None = None,
+        source_evaluation_id: str | None = None,
+        family_key: str | None = None,
+    ) -> Lesson | None:
+        created: dict[str, Any] = {}
+
+        def update(raw: dict[str, Any]) -> dict[str, Any]:
+            memory = MemoryStore.from_dict(raw or {})
+            lesson = memory.add_lesson(content, tags, source_evaluation_id, family_key)
+            if lesson is not None:
+                created.update(lesson.__dict__)
+            return memory.to_dict()
+
+        self.state_store.mutate(self.key, update, default={})
+        if not created:
+            return None
+        return Lesson(**created)
 
 
 # ---------------------------------------------------------------------------

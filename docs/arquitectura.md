@@ -468,9 +468,31 @@ reconciliación. El sistema opera solo en papel y publica el informe diario.
 Lecciones aprendidas, post-mortems automáticos, curator con memoria, revisión semanal del
 portfolio, drift detection.
 
-**Fase 4 — Capital real gradual (según resultados en papel ≥ 4–8 semanas)**
-Modo `LIVE_CAPITAL_REDUCIDO`, con límites conservadores; escalado progresivo supervisado
-por el CEO.
+**Fase 4 — Integraciones de plataforma y fuentes reales**
+Adaptadores NATS JetStream y Postgres, snapshots de mercado, clientes del Model Gateway y
+broker paper. Sin capital real.
+
+**Fase 5 — Sistema vivo**
+Planificador diario: ingesta → research/validación → paper → memoria → comité semanal; cada
+fallo de fase queda auditado y degrada con los últimos datos válidos.
+
+**Fase 6 — Orquestación multiagente y controles ejecutables**
+Workers de departamento sobre contratos versionados, límites de cola, presupuesto G3,
+directivas y protección contra bucles/redelivery.
+
+**Fase 7 — Macro & News operativo**
+Fuentes GDELT/Finnhub/RSS, deduplicación y filtro de relevancia con failover auditado.
+
+**Fase 8 — Containerización por departamento (en curso)**
+Workers durables para Research, Backtest, Validation, Macro/News y Executive; riesgo y
+ejecución paper siguen en el ciclo monolítico mientras se completa el estado transaccional,
+la inbox/outbox y la reconciliación.
+
+**Gate previo a capital real (pendiente)**
+Solo evaluar `LIVE_CAPITAL_REDUCIDO` después de al menos 4–8 semanas de paper estable,
+pruebas de caos/reconciliación, control de presupuesto bajo concurrencia, autenticación y
+auditoría completa del dashboard, kill switch probado y aprobación explícita del CEO. El
+gate no se abre por completar una fase de software.
 
 ---
 

@@ -20,6 +20,7 @@ Guardarraíles propios del departamento (M-x):
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import urllib.request
 import uuid
@@ -228,7 +229,12 @@ class NewsAnalystAgent(Agent):
 
     # -- ingesta ----------------------------------------------------------------
 
-    def ingest(self) -> list[Envelope]:
+    def ingest(
+        self,
+        *,
+        cycle_id: str | None = None,
+        causation_id: str | None = None,
+    ) -> list[Envelope]:
         """Descarga todas las fuentes, dedup, filtro Jev y publica alertas."""
         items = self._fetch_all()
         unique, _dropped = dedup(items)
@@ -255,17 +261,23 @@ class NewsAnalystAgent(Agent):
                     payload={"title": item["title"][:120], "reason": reason},
                 )
                 continue
+            identity = item.get("url") or f"{item['source']}|{item['title']}"
+            stable_key = hashlib.sha256(f"{cycle_id or 'manual'}|{identity}".encode()).hexdigest()[:20]
             published.append(self.publish(
                 "news.alert.v1",
                 {
-                    "alert_id": f"alert-{uuid.uuid4().hex[:8]}",
+                    "alert_id": f"alert-{stable_key}",
                     "category": category,
                     "confidence": confidence,
                     "single_source": item.get("cross_sources", 1) < 2,
                     "source": item["source"],
                     "quotes": [item["title"]],
                     "summary": item["title"],
+                    "cycle_id": cycle_id,
                 },
+                id=f"news-{stable_key}" if cycle_id else str(uuid.uuid4()),
+                correlation_id=cycle_id,
+                causation_id=causation_id,
             ))
         return published
 

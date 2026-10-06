@@ -18,9 +18,27 @@ docker compose up -d
 docker compose ps                       # ambos "healthy/running"
 # Postgres: localhost:5432 (trading/trading_floor) · NATS: localhost:4222, monitor 8222
 
+# Alternativa: imagen Python y dashboard en contenedores (ciclo paper de transición)
+docker compose --profile app build
+docker compose --profile app run --rm tf-cycle  # falla si NATS/Postgres no están sanos
+docker compose --profile app up -d dashboard    # localhost:3100; sin auth, solo loopback
+
+# Pipeline Research → Backtest → Validation + Macro/News + Executive en procesos separados
+docker compose --profile pipeline --profile manual build
+docker compose --profile pipeline --profile manual run --rm tf-pipeline  # ingesta AAPL y ciclo inmediato
+
+# Workers residentes + ciclo inicial + scheduler diario (UTC, por defecto 22:00)
+docker compose --profile pipeline up -d
+
+# Escalar los workers batch (queue consumers durables compartidos)
+docker compose --profile pipeline up -d --scale tf-backtest=2 --scale tf-validation=2 \
+  tf-research tf-backtest tf-validation tf-macro-news tf-executive
+docker compose --profile pipeline run --rm tf-ingest
+docker compose --profile pipeline --profile manual run --rm --no-deps tf-pipeline
+
 # 2) Código y tests
 uv sync
-uv run pytest -q                        # 94 tests
+uv run pytest -q                        # suite completa
 
 # 3) Demos end-to-end
 uv run python scripts/run_daily_cycle.py    # sistema vivo: ciclo diario completo
@@ -29,6 +47,17 @@ uv run python scripts/run_paper_day.py --csv data/aapl.csv   # paper trading sob
 uv run python scripts/run_trading_day.py
 uv run python scripts/run_evolution.py
 ```
+
+`tf-cycle` ejecuta el `DailyCycle` end-to-end de transición; Riesgo/Ejecución paper aún
+comparten proceso mediante `InMemoryBus`. El perfil `pipeline` ejecuta Research, Backtest,
+Validation, Macro/News y Executive como runners durables separados. Las propuestas llevan
+un snapshot de mercado SHA-256; el CLI espera readiness, veredictos y el informe ejecutivo.
+El inbox PostgreSQL evita repetir envelopes completados. Backtest/Validation comparten
+durables multi-subject y se han verificado con dos réplicas; Research y Macro/News siguen
+single-replica. No escales Research con LLM ni despliegues Risk/Execution hasta cerrar
+reservas de presupuesto, outbox transaccional y el estado del paper.
+`tf-scheduler` descarga AAPL y lanza un ciclo al día según `TF_SCHEDULE_UTC`; guarda fecha de
+éxito y backoff en Postgres para no duplicar el ciclo al reiniciar.
 
 ## Datos reales (Yahoo Finance, sin API key)
 

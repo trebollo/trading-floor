@@ -25,6 +25,13 @@ agents:
       tokens_per_day: 2000000
       compute_minutes_per_day: 120
 
+  research-cycle:
+    department: research
+    role: cycle_coordinator
+    tools: [read_market_data, search_memory]
+    outputs: [cycle.research_batch.v1, agent.heartbeat.v1]
+    data_domains: [market_history, lessons, directives]
+
   research-coder:
     department: research
     role: coder
@@ -108,6 +115,13 @@ agents:
     tools: [read_market_data, read_calendar, publish_regime]
     outputs: [macro.regime.v1, macro.outlook.v1, agent.heartbeat.v1]
     data_domains: [market, calendar]
+
+  macro-cycle:
+    department: macro
+    role: cycle_coordinator
+    tools: [read_market_data]
+    outputs: [cycle.macro_news_completed.v1, ops.incident.v1, agent.heartbeat.v1]
+    data_domains: [market, news_sources, calendar]
 
   news-analyst:
     department: macro

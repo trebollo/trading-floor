@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,7 @@ from typing import Any
 
 from tf.audit import AuditLog
 from tf.bus import BaseBus
+from tf.contracts import Actor
 from tf.datafeed import fetch_yahoo, ingest_yahoo
 from tf.departments import ChiefOfStaffAgent, MacroAnalystAgent
 from tf.directives import DirectivesBoard
@@ -36,7 +38,7 @@ from tf.drift import DriftVerdict, StrategyPerformance, WeeklyCommittee, postmor
 from tf.gateway import ModelGateway
 from tf.host import AgentHost
 from tf.marketdata import load_csv
-from tf.memory import MemoryStore
+from tf.memory import MemoryStore, PostgresMemoryStore
 from tf.paper import run_paper_session
 from tf.pipeline import PipelineRunner
 from tf.risk import StrategyContract
@@ -78,6 +80,7 @@ class DailyCycle:
         directives: DirectivesBoard | None = None,  # K-5: directrices del CEO
         news_config: dict[str, Any] | None = None,  # None = config/news.yaml; {} = offline (tests)
         now: float | None = None,
+        state_store: Any | None = None,
     ) -> None:
         self.bus = bus
         self.audit = audit
@@ -86,30 +89,59 @@ class DailyCycle:
         self.governor = governor
         self.directives = directives
         self.news_config = news_config
+        self.state_store = state_store
         self.now = now if now is not None else time.time()
         if policy is None:
             policy = ValidationPolicy(min_trades=30)
             if directives is not None:  # la directiva vigente sobreescribe (K-5)
                 policy = directives.apply_to_policy(policy)
         self.policy = policy
-        self.memory = MemoryStore.load(self.config.memory_path) if self.config.memory_path.exists() else MemoryStore()
+        if self.state_store is not None:
+            self.memory = PostgresMemoryStore(self.state_store)
+        else:
+            self.memory = MemoryStore.load(self.config.memory_path) if self.config.memory_path.exists() else MemoryStore()
 
     # -- estado persistente del ciclo ------------------------------------------
 
     def _load_state(self) -> dict[str, Any]:
+        if self.state_store is not None:
+            return self.state_store.get(
+                "scheduler/cycle-state",
+                {"last_run": None, "last_committee": None, "portfolio": []},
+            )
         if self.config.state_path.exists():
             return json.loads(self.config.state_path.read_text())
         return {"last_run": None, "last_committee": None, "portfolio": []}
 
     def _save_state(self, state: dict[str, Any]) -> None:
+        if self.state_store is not None:
+            self.state_store.set("scheduler/cycle-state", state)
+            return
         self.config.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.config.state_path.write_text(json.dumps(state, indent=2))
 
     def _incident(self, phase: str, exc: Exception) -> None:
+        detail = f"{type(exc).__name__}: {exc}"
         self.audit.append(
             actor="scheduler", event_type="ops.incident",
-            payload={"phase": phase, "error": f"{type(exc).__name__}: {exc}"},
+            payload={"phase": phase, "error": detail},
         )
+        try:
+            self.bus.publish_raw(
+                "ops.incident.v1",
+                {"incident_id": f"inc-{uuid.uuid4().hex[:12]}", "severity": "V2",
+                 "source": f"scheduler/{phase}", "summary": f"fallo en fase {phase}",
+                 "detail": detail},
+                actor=Actor(agent="scheduler", role="platform", department="executive"),
+            )
+            if hasattr(self, "_host"):
+                self._host.drain()
+        except Exception as bus_error:
+            # El audit local sigue siendo el último recurso si el bus está caído.
+            self.audit.append(
+                actor="scheduler", event_type="ops.incident_publish_failed",
+                payload={"phase": phase, "error": f"{type(bus_error).__name__}: {bus_error}"},
+            )
 
     def _permissions(self):
         from tf.permissions import PermissionBroker
@@ -231,6 +263,16 @@ class DailyCycle:
     # -- ciclo completo ------------------------------------------------------------
 
     def run(self, force_weekly: bool = False) -> dict[str, Any]:
+        """Un solo ciclo activo globalmente cuando el estado compartido es PG."""
+        if self.state_store is None:
+            return self._run_once(force_weekly=force_weekly)
+        with self.state_store.lock("scheduler/daily-cycle"):
+            # El adapter consulta/muta bajo lock por operación; así no pisa las
+            # lecciones que puedan añadir otros workers durante el ciclo.
+            self.memory = PostgresMemoryStore(self.state_store)
+            return self._run_once(force_weekly=force_weekly)
+
+    def _run_once(self, force_weekly: bool = False) -> dict[str, Any]:
         started = time.time()
         state = self._load_state()
         report: dict[str, Any] = {
@@ -309,8 +351,9 @@ class DailyCycle:
                 self._incident("comite", exc)
 
         try:
-            self.config.memory_path.parent.mkdir(parents=True, exist_ok=True)
-            self.memory.save(self.config.memory_path)
+            if self.state_store is None:
+                self.config.memory_path.parent.mkdir(parents=True, exist_ok=True)
+                self.memory.save(self.config.memory_path)
         except Exception as exc:
             self._incident("memoria", exc)
 

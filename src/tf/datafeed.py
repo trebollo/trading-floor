@@ -8,6 +8,7 @@ para el resto del sistema (G4/B-6): aquí solo se crean o actualizan ficheros cr
 
 from __future__ import annotations
 
+import calendar
 import csv
 import io
 import json
@@ -32,7 +33,9 @@ def fetch_yahoo(symbol: str, start: str | None = None, end: str | None = None) -
 
 
 def _yyyymmdd_to_epoch(date: str) -> int:
-    return int(time.mktime(time.strptime(date, "%Y%m%d")))
+    # Yahoo espera epochs absolutos; mktime interpreta la fecha en la TZ local
+    # y hacía variar period1/period2 entre máquina de desarrollo y contenedor.
+    return calendar.timegm(time.strptime(date, "%Y%m%d"))
 
 
 def normalize_yahoo(raw: str, symbol: str) -> str:

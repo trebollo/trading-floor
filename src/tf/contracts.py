@@ -147,6 +147,9 @@ class StrategyProposal(BaseModel):
     exit_rules: str
     prior_risk_estimate: str
     cited_lesson_ids: list[str] = []
+    cycle_id: str | None = None
+    market_data_uri: str | None = None
+    market_data_sha256: str | None = None
     spec: dict[str, Any] | None = Field(
         default=None,
         description="Borrador de spec DSL propuesto por research-hypothesis; research-coder lo formaliza",
@@ -159,6 +162,9 @@ class StrategySpec(BaseModel):
     proposal_id: str
     spec: dict[str, Any]
     code_dsl: str
+    cycle_id: str | None = None
+    market_data_uri: str | None = None
+    market_data_sha256: str | None = None
 
 
 @message("backtest.report.v1")
@@ -170,6 +176,11 @@ class BacktestReport(BaseModel):
     variant_count: int = Field(ge=0, le=50)
     blind_test_used: bool = False
     rationale: str
+    proposal_id: str | None = None
+    spec: dict[str, Any] | None = None
+    cycle_id: str | None = None
+    market_data_uri: str | None = None
+    market_data_sha256: str | None = None
 
 
 @message("validation.verdict.v1")
@@ -183,6 +194,8 @@ class ValidationVerdict(BaseModel):
     )
     skeptic_scenarios: int = Field(ge=0)
     rationale: str
+    cycle_id: str | None = None
+    proposal_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +255,66 @@ class OpsIncident(BaseModel):
     detail: str = ""
 
 
+@message("ops.dead_letter.v1")
+class OpsDeadLetter(BaseModel):
+    """Sobre que agotó los reintentos de un consumer durable."""
+
+    department: str
+    original_type: str
+    original_id: str
+    original_envelope: dict[str, Any]
+    delivery_count: int = Field(ge=1)
+    error: str
+
+
+@message("cycle.trigger.v1")
+class CycleTrigger(BaseModel):
+    cycle_id: str
+    cycle_date: str
+    market_data_uri: str
+    market_data_sha256: str
+    proposal_count: int = Field(default=5, ge=1, le=100)
+
+
+@message("cycle.research_batch.v1")
+class CycleResearchBatch(BaseModel):
+    cycle_id: str
+    proposal_ids: list[str]
+    skipped_count: int = Field(default=0, ge=0)
+    rationale: str = ""
+
+
+@message("cycle.macro_news_completed.v1")
+class CycleMacroNewsCompleted(BaseModel):
+    cycle_id: str
+    regime_published: bool
+    alerts_published: int = Field(default=0, ge=0)
+    incident_count: int = Field(default=0, ge=0)
+
+
+@message("cycle.completed.v1")
+class CycleCompleted(BaseModel):
+    cycle_id: str
+    cycle_date: str
+    dataset_sha256: str
+    validation_count: int = Field(ge=0)
+    budget: dict[str, Any] = {}
+    macro_news: dict[str, Any] = {}
+
+
+@message("runner.probe.v1")
+class RunnerProbe(BaseModel):
+    probe_id: str
+
+
+@message("runner.ready.v1")
+class RunnerReady(BaseModel):
+    probe_id: str
+    department: str
+    status: Literal["up"] = "up"
+    subscriptions: list[str]
+
+
 @message("macro.regime.v1")
 class MacroRegime(BaseModel):
     regime: str
@@ -249,6 +322,7 @@ class MacroRegime(BaseModel):
     horizon: Literal["intraday", "days", "weeks"]
     stale: bool = False
     rationale: str
+    cycle_id: str | None = None
 
 
 @message("news.alert.v1")
@@ -262,6 +336,7 @@ class NewsAlert(BaseModel):
         description="Campos estructurados de la fuente que sustentan cada afirmación"
     )
     summary: str
+    cycle_id: str | None = None
 
 
 @message("executive.daily_report.v1")
@@ -273,6 +348,7 @@ class DailyReport(BaseModel):
     )
     budget: dict[str, Any] = {}
     summary: str
+    cycle_id: str | None = None
 
 
 __all__ = [

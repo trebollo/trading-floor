@@ -55,14 +55,17 @@ class CostGovernor:
         state_path: str | Path | None = None,
         audit: Any | None = None,
         now: float | None = None,
+        state_store: Any | None = None,
+        state_key: str = "g3/budget",
     ) -> None:
         self.limits = limits or BudgetLimits()
         self.state_path = Path(state_path) if state_path else None
         self.audit = audit
         self._now = now
+        self.state_store = state_store
+        self.state_key = state_key
         self._usage = self._load_state()
-        if "days" not in self._usage:
-            self._usage = {"days": {}}
+        self._usage = self._normalize_state(self._usage)
 
     # -- tiempo (inyectable para tests) ------------------------------------------
 
@@ -83,9 +86,17 @@ class CostGovernor:
     # -- estado -------------------------------------------------------------------
 
     def _load_state(self) -> dict[str, Any]:
+        if self.state_store is not None:
+            return self.state_store.get(self.state_key, {"days": {}})
         if self.state_path and self.state_path.exists():
             return json.loads(self.state_path.read_text())
         return {}
+
+    @staticmethod
+    def _normalize_state(state: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(state, dict) or not isinstance(state.get("days"), dict):
+            return {"days": {}}
+        return state
 
     def _persist(self) -> None:
         if self.state_path:
@@ -96,22 +107,49 @@ class CostGovernor:
 
     def check(self, agent: str) -> None:
         """Lanza BudgetExceeded si alguna ventana del agente (o global) está agotada."""
-        day = self._usage["days"].get(self._day(), {})
+        if self.state_store is not None:
+            def reserve_call(state: dict[str, Any]) -> dict[str, Any]:
+                state = self._normalize_state(state)
+                reason = self._limit_reason(agent, state)
+                if reason:
+                    self._blocked(agent, reason)
+                day = state["days"].setdefault(
+                    self._day(), {"agents": {}, "calls_by_hour": {}, "eur": 0.0}
+                )
+                calls = day.setdefault("calls_by_hour", {}).setdefault(str(self._hour()), {})
+                # La reserva ocurre antes de la llamada externa y es atómica entre
+                # procesos; si el proveedor falla, el intento sigue consumiendo
+                # cuota horaria, de forma deliberadamente conservadora.
+                calls[agent] = calls.get(agent, 0) + 1
+                return state
+
+            self._usage = self.state_store.mutate(
+                self.state_key, reserve_call, default={"days": {}}
+            )
+            return
+
+        reason = self._limit_reason(agent, self._usage)
+        if reason:
+            self._blocked(agent, reason)
+
+    def _limit_reason(self, agent: str, state: dict[str, Any]) -> str | None:
+        day = state.get("days", {}).get(self._day(), {})
         agent_usage = day.get("agents", {}).get(agent, {})
 
         tokens = agent_usage.get("tokens", 0)
         tokens_limit = self._tokens_per_day(agent)
         if tokens >= tokens_limit:
-            self._blocked(agent, f"tokens diarios {tokens} ≥ límite {tokens_limit}")
+            return f"tokens diarios {tokens} ≥ límite {tokens_limit}"
 
         calls_hour_key = str(self._hour())
         calls = day.get("calls_by_hour", {}).get(calls_hour_key, {}).get(agent, 0)
         if calls >= self.limits.calls_per_hour:
-            self._blocked(agent, f"llamadas en la hora {calls} ≥ límite {self.limits.calls_per_hour}")
+            return f"llamadas en la hora {calls} ≥ límite {self.limits.calls_per_hour}"
 
         eur_global = day.get("eur", 0.0)
         if eur_global >= self.limits.global_eur_per_day:
-            self._blocked(agent, f"presupuesto global diario {eur_global:.2f}€ ≥ {self.limits.global_eur_per_day:.2f}€")
+            return f"presupuesto global diario {eur_global:.2f}€ ≥ {self.limits.global_eur_per_day:.2f}€"
+        return None
 
     def _blocked(self, agent: str, reason: str) -> None:
         if self.audit is not None:
@@ -121,6 +159,23 @@ class CostGovernor:
         raise BudgetExceeded(f"{agent}: {reason}")
 
     def record(self, agent: str, input_tokens: int, output_tokens: int, cost_usd: float = 0.0) -> None:
+        if self.state_store is not None:
+            def add_usage(state: dict[str, Any]) -> dict[str, Any]:
+                state = self._normalize_state(state)
+                day = state["days"].setdefault(
+                    self._day(), {"agents": {}, "calls_by_hour": {}, "eur": 0.0}
+                )
+                agent_usage = day.setdefault("agents", {}).setdefault(agent, {"tokens": 0, "eur": 0.0})
+                agent_usage["tokens"] += input_tokens + output_tokens
+                agent_usage["eur"] = round(agent_usage["eur"] + cost_usd, 6)
+                day["eur"] = round(day.get("eur", 0.0) + cost_usd, 6)
+                return state
+
+            self._usage = self.state_store.mutate(
+                self.state_key, add_usage, default={"days": {}}
+            )
+            return
+
         day = self._usage["days"].setdefault(self._day(), {"agents": {}, "calls_by_hour": {}, "eur": 0.0})
         agent_usage = day["agents"].setdefault(agent, {"tokens": 0, "eur": 0.0})
         agent_usage["tokens"] += input_tokens + output_tokens
@@ -131,4 +186,6 @@ class CostGovernor:
         self._persist()
 
     def usage(self) -> dict[str, Any]:
+        if self.state_store is not None:
+            self._usage = self._normalize_state(self.state_store.get(self.state_key, {"days": {}}))
         return self._usage["days"].get(self._day(), {"agents": {}, "eur": 0.0})

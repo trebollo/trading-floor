@@ -73,17 +73,17 @@ class ResearchLLMAgent(ResearchTemplateAgent):
 
     # -- generación ----------------------------------------------------------
 
-    def generate(self, count: int | None = None) -> list[tuple[Any, dict[str, Any]]]:
+    def generate(self, count: int | None = None, **context: Any) -> list[tuple[Any, dict[str, Any]]]:
         if self.generative is None:
             self._audit_failover("sin credencial del modelo generativo; uso plantilla determinista")
-            return super().generate(count)
+            return super().generate(count, **context)
         try:
             raw = self.generative.complete(system=SYSTEM_PROMPT, user=self._user_prompt(count or 5))
         except BudgetExceeded:
             # G3: presupuesto agotado. Degradación a plantilla, no reintento: la
             # ventana se resetea al día siguiente y el failover queda auditado.
             self._audit_failover("presupuesto agotado (G3); uso plantilla determinista")
-            return super().generate(count)
+            return super().generate(count, **context)
         seeds = self._parse_proposals(raw)
         out = []
         for seed in seeds:
@@ -102,7 +102,7 @@ class ResearchLLMAgent(ResearchTemplateAgent):
                     payload={"hypothesis": seed["hypothesis"], "reason": "jev: plausibilidad por debajo del umbral"},
                 )
                 continue
-            out.append((self._publish_proposal(seed), seed))
+            out.append((self._publish_proposal(seed, **context), seed))
         return out
 
     def _user_prompt(self, count: int) -> str:
@@ -181,7 +181,7 @@ class ResearchLLMAgent(ResearchTemplateAgent):
                 return False
         return True
 
-    def _publish_proposal(self, seed: dict[str, Any]) -> Any:
+    def _publish_proposal(self, seed: dict[str, Any], **context: Any) -> Any:
         return self.publish(
             "strategy.proposal.v1",
             {
@@ -194,7 +194,12 @@ class ResearchLLMAgent(ResearchTemplateAgent):
                 "prior_risk_estimate": "0.5% por operación",
                 "cited_lesson_ids": [],
                 "spec": seed["spec"],
+                "cycle_id": context.get("cycle_id"),
+                "market_data_uri": context.get("market_data_uri"),
+                "market_data_sha256": context.get("market_data_sha256"),
             },
+            correlation_id=context.get("cycle_id"),
+            causation_id=context.get("causation_id"),
         )
 
     def _audit_failover(self, reason: str) -> None:

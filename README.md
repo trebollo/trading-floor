@@ -44,6 +44,19 @@ El orb no tiene Docker; la infraestructura (Postgres+Timescale, NATS) se ejecuta
 máquina con el CLI local de Amp. Guía completa en
 [docs/desarrollo-local.md](docs/desarrollo-local.md).
 
+Para ejecutar el ciclo y el dashboard en contenedores tras construir las imágenes:
+
+```bash
+docker compose up -d                         # NATS JetStream persistente + Postgres
+docker compose --profile app build
+docker compose --profile app run --rm tf-cycle  # requiere NATS y Postgres; estado en volumen
+docker compose --profile app up -d dashboard    # UI solo accesible desde localhost:3100
+docker compose --profile pipeline --profile manual build
+docker compose --profile pipeline --profile manual run --rm tf-pipeline  # ejecutar ahora
+# Perfil residente: ingesta inicial + workers + scheduler diario (UTC, TF_SCHEDULE_UTC)
+docker compose --profile pipeline up -d
+```
+
 ## Estado
 
 Fase de diseño.
@@ -59,6 +72,11 @@ Fase de diseño.
   [Execution & Ops](docs/especificaciones/05-execution-ops.md) ·
   [Macro & News](docs/especificaciones/06-macro-news.md) ·
   [Dirección](docs/especificaciones/07-direccion.md).
+- **Fase 8 (containerización por departamento)** — pipeline Research/Backtest/Validation,
+  Macro/News y Executive corren como workers Compose con estado Postgres; Backtest/Validation
+  ya escalan a 2 réplicas verificadas. El scheduler residente publica el pipeline diario;
+  Risk/Execution paper siguen en el ciclo monolítico hasta completar outbox/ledger:
+  [docs/especificaciones/08-containerizacion.md](docs/especificaciones/08-containerizacion.md).
 
 Hoja de ruta de implementación: [docs/arquitectura.md §10](docs/arquitectura.md#10-hoja-de-ruta-por-fases).
 
